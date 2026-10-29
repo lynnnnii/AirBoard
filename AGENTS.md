@@ -96,7 +96,7 @@ Stroke(stroke_id: int, page: int, tool: Tool, color: str, width: float,
 
 
 - 모든 도구 전환은 **최소 유지 프레임**을 거친 뒤 적용해 순간 오판을 막습니다.
-- 상태가 바뀐 직후 몇 프레임의 좌표는 버려 획 끝 꼬리를 제거합니다.
+- 획 꼬리 제거: 펜을 내린 직후 몇 프레임의 좌표는 버리고(시작 꼬리), 펜을 든 순간 획의 마지막 몇 점을 거슬러 지웁니다(끝 꼬리). 끝 꼬리는 `pen_down`이 꺼지기 전에 이미 획에 들어가 있기 때문입니다.
 - 임계값과 프레임 수는 코드에 하드코딩하지 말고 `config/default.json`에서 읽습니다.
 - 제스처 인식과 기능 실행은 분리합니다. 매핑은 `config/gestures.json`에서만 정의합니다.
 - 화면에 여러 손이 잡히면 캘리브레이션 영역 안에 있고 가장 큰 손을 우선 추적합니다.
@@ -110,6 +110,8 @@ python main.py --pdf data/pdfs/sample.pdf                     # 웹캠 입력
 python main.py --pdf data/pdfs/sample.pdf --video data/recordings/s1.mp4   # 녹화 영상 입력
 python main.py --pdf ... --no-smoothing --no-hysteresis        # 비교 시연용
 python -m eval.run --labels eval/labels/                      # 평가
+python -m airboard.smoothing.compare                          # 떨림 보정 방식 비교 화면 (웹캠)
+python -m unittest discover tests                             # 단위 테스트
 
 ```
 
