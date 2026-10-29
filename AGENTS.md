@@ -1,4 +1,4 @@
-# [CLAUDE.md](http://CLAUDE.md)
+# [AGENTS.md / CLAUDE.md](http://CLAUDE.md) 
 
 이 파일은 AirBoard 저장소에서 작업하는 Claude Code(및 팀원)를 위한 안내서입니다. 코드를 수정하기 전에 끝까지 읽어 주세요.
 
