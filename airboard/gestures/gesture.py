@@ -51,6 +51,10 @@ CFG = {
     #   (편 손가락 약 1.6 이상, 핀치할 때 검지 약 0.9~1.2, 주먹 약 0.3~0.7)
     "fold_tip": 0.8,         # 이보다 작으면 접힌 손가락
     "fist_min_folded": 3,    # 검지 포함 네 손가락 중 이 개수 이상 접히면 주먹
+    # 검지 뻗음: 검지끝이 검지MCP보다 손가락 방향(손목→중지MCP)으로 얼마나 나가 있는지 / 손바닥 크기
+    #   주먹은 검지 끝이 손바닥 안으로 말려 MCP보다 손목 쪽에 있고 (0 이하),
+    #   핀치(나머지 손가락 접음)는 검지가 C자라 끝이 MCP보다 바깥에 있다 (양수).
+    "fist_index_reach": 0.15,# 이보다 작아야 주먹 (핀치와 구분)
     "fist_frames": 2,        # 주먹이 이 프레임 이상 유지돼야 지우개로 인정
 
     # 박수: 양 손바닥 중심 거리 / 평균 손바닥 크기
@@ -92,8 +96,10 @@ def palm_center(lm):
 
 
 def pinch_ratio(lm):
-    """엄지끝-검지끝 3D 거리를 손바닥 크기로 정규화. z를 포함해 손이 옆으로 돌아간 경우의 오판을 줄인다."""
-    return dist(lm[THUMB_TIP], lm[INDEX_TIP]) / palm_size(lm)
+    """엄지끝-검지끝 2D 거리를 3D 손바닥 크기로 정규화.
+    분자는 2D: MediaPipe의 손가락 끝 z는 흔들림이 커서, 넣으면 붙여도 비율이 0.3~0.4로 떠 핀치가 안 잡힌다.
+    분모는 3D: 2D 손바닥 크기는 손을 눕히면 짧아져 비율이 커진다. 손목·MCP의 z는 비교적 안정적이다."""
+    return dist(lm[THUMB_TIP, :2], lm[INDEX_TIP, :2]) / (dist(lm[WRIST], lm[MIDDLE_MCP]) + 1e-6)
 
 
 def finger_curls(lm):
@@ -110,6 +116,14 @@ def tip_to_palm(lm):
     return {name: dist(lm[tip, :2], c) / s for name, (mcp, tip) in FINGERS.items()}
 
 
+def index_reach(lm):
+    """검지끝이 검지MCP보다 손가락 방향(손목→중지MCP)으로 나가 있는 정도. 음수면 손바닥 안으로 말림.
+    손이 기울어져도 동작하도록 화면 y축 대신 손바닥 축에 투영한다."""
+    axis = lm[MIDDLE_MCP, :2] - lm[WRIST, :2]
+    s = palm_size(lm)
+    return float(np.dot(lm[INDEX_TIP, :2] - lm[INDEX_MCP, :2], axis / s)) / s
+
+
 def classify_pose(lm, curls, tips=None):
     """한 손의 정적인 모양 분류 (핀치 여부는 PinchDetector가 따로 판단)."""
     tips = tip_to_palm(lm) if tips is None else tips
@@ -119,8 +133,10 @@ def classify_pose(lm, curls, tips=None):
     # 1) 주먹: 검지가 접혀 있고, 네 손가락 중 fist_min_folded개 이상 접힘.
     #    MediaPipe는 주먹일 때 손가락 하나쯤은 덜 접힌 것으로 잡는 경우가 많아 4개 모두를 요구하지 않는다.
     #    주먹은 엄지·검지 끝도 가까워서 핀치보다 먼저 검사해야 한다.
-    #    핀치할 때 검지 끝은 손바닥 중심에서 꽤 떨어져 있으므로 검지 접힘 조건으로 구분된다.
-    if folded["index"] and sum(folded.values()) >= CFG["fist_min_folded"]:
+    #    나머지 손가락을 접고 핀치하면 검지 끝도 손바닥 중심 가까이 오므로 접힘 조건만으로는 구분이 안 된다.
+    #    그래서 검지 끝이 MCP보다 손바닥 안쪽으로 말려 들어갔는지(index_reach)를 추가로 본다.
+    if folded["index"] and sum(folded.values()) >= CFG["fist_min_folded"] \
+            and index_reach(lm) < CFG["fist_index_reach"]:
         return "FIST"
     # 2) 포인터: 검지만 펴고 나머지 접힘 + 엄지와 검지가 떨어져 있음
     if extended["index"] and folded["middle"] and folded["ring"] and folded["pinky"] \
@@ -323,6 +339,8 @@ class GestureRecognizer:
 
         r.debug = {"hand_count": len(hands),
                    "pinch_ratio": round(ratio, 2),
+                   "pinch_3d": round(dist(lm[THUMB_TIP], lm[INDEX_TIP]) / (dist(lm[WRIST], lm[MIDDLE_MCP]) + 1e-6), 2),
+                   "index_reach": round(index_reach(lm), 2),
                    "fold(tip-palm)": " ".join(f"{v:.2f}" for v in tips.values()),
                    "curl": " ".join(f"{v:.2f}" for v in curls.values()),
                    "clap_d": None if self.clap.last_d is None else round(self.clap.last_d, 2),
