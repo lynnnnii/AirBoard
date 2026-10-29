@@ -96,9 +96,10 @@ def palm_center(lm):
 
 
 def pinch_ratio(lm):
-    """엄지끝-검지끝 3D 거리를 3D 손바닥 크기로 정규화. z를 포함해 손이 옆으로 돌아간 경우의 오판을 줄인다.
-    분모도 3D여야 한다: 2D 손바닥 크기는 손을 눕히면 짧아져 비율이 커지고 핀치가 잘 안 잡힌다."""
-    return dist(lm[THUMB_TIP], lm[INDEX_TIP]) / (dist(lm[WRIST], lm[MIDDLE_MCP]) + 1e-6)
+    """엄지끝-검지끝 2D 거리를 3D 손바닥 크기로 정규화.
+    분자는 2D: MediaPipe의 손가락 끝 z는 흔들림이 커서, 넣으면 붙여도 비율이 0.3~0.4로 떠 핀치가 안 잡힌다.
+    분모는 3D: 2D 손바닥 크기는 손을 눕히면 짧아져 비율이 커진다. 손목·MCP의 z는 비교적 안정적이다."""
+    return dist(lm[THUMB_TIP, :2], lm[INDEX_TIP, :2]) / (dist(lm[WRIST], lm[MIDDLE_MCP]) + 1e-6)
 
 
 def finger_curls(lm):
@@ -338,6 +339,7 @@ class GestureRecognizer:
 
         r.debug = {"hand_count": len(hands),
                    "pinch_ratio": round(ratio, 2),
+                   "pinch_3d": round(dist(lm[THUMB_TIP], lm[INDEX_TIP]) / (dist(lm[WRIST], lm[MIDDLE_MCP]) + 1e-6), 2),
                    "index_reach": round(index_reach(lm), 2),
                    "fold(tip-palm)": " ".join(f"{v:.2f}" for v in tips.values()),
                    "curl": " ".join(f"{v:.2f}" for v in curls.values()),
