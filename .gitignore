@@ -1,0 +1,8 @@
+# 녹화 영상·대용량 PDF·얼굴이 나오는 데이터는 커밋하지 않음
+data/*
+!data/.gitkeep
+
+__pycache__/
+*.pyc
+.venv/
+venv/

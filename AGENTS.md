@@ -49,6 +49,7 @@ airboard/
     render/                # PDF 렌더링, 필기 레이어, 지우개, 저장
     ui/                    # 커서, 팔레트, 도구 알림, 설정 화면
     core/                  # 공용 데이터 타입, 상태 머신, 이벤트
+  models/                  # MediaPipe 모델 파일 (hand_landmarker.task)
   eval/                    # 평가 스크립트, 라벨 파일
   data/                    # 녹화 영상·테스트 PDF (용량 큰 파일은 git에 올리지 않음)
   tests/
