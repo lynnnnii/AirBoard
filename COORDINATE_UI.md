@@ -34,7 +34,7 @@ OpenCV 패키지는 `opencv-contrib-python` 하나만 사용하며 `import cv2`�
 - `C`: 재캘리브레이션. 손끝을 **좌상→우상→우하→좌하**에 두고 각각 Space를 누릅니다. 또는 왼쪽 입력 패널에서 네 점을 클릭합니다. C를 다시 누르면 처음부터 시작합니다. 잘못된 사각형은 거부하고 이전 변환을 유지합니다.
 - 상단 팔레트에 커서를 설정된 시간(기본 0.65초) 머무르면 색상/굵기 변경. 팔레트 조작 중에는 필기하지 않습니다.
 - `S`: 설정 화면. 위/아래로 제스처 행 선택, 좌/우로 연결 기능 변경, Enter 저장·즉시 적용, Esc 취소. 제스처 이름 자체를 추가하려면 `config/gestures.json`을 편집합니다. 해당 이름은 인식기가 실제로 출력해야 합니다.
-- 좌/우 방향키: 비상용 페이지 번호 변경. 제스처 페이지 넘김은 필기 중 차단합니다. 이 데모에는 PDF가 없으므로 번호와 명령만 확인합니다.
+- 좌/우 방향키: 비상용 페이지 번호 변경. 제스처 페이지 넘김은 필기 중 차단합니다. `--pdf`가 없으면 번호와 명령만 확인하고, `--pdf` 실행에서는 실제 페이지를 이동합니다.
 - `X`: 미리보기 필기 지우기. `Q` 또는 설정 화면 밖의 Esc: 종료.
 - 마우스 모드: 왼쪽 입력 패널에서 왼쪽 버튼 드래그가 핀치입니다. 도구 전환은 웹캠 제스처로 확인합니다.
 - `--virtual`: 자동 곡선 입력과 주기적인 핀치 해제로 획 분리를 보여줍니다.
@@ -81,7 +81,7 @@ ui = UIController(calibration, settings)
 
 `RenderPacket`의 position은 `(0,0)~(width-1,height-1)` 슬라이드 픽셀 또는 None, tool은 pen/highlighter/eraser/pointer, active는 쓰기/지우기 여부, phase는 down/move/up/hover, color는 #RRGGBB, width는 논리 픽셀, opacity는 형광펜 불투명도, commands는 page_next/page_prev 튜플입니다. **up은 position이 None이어도 직전 획을 종료해야 합니다.** up 패킷의 tool이 새 도구일 수 있으므로 렌더러는 열린 획의 도구를 별도로 보관합니다. 스무딩 담당은 down/up에서 필터를 초기화하면 됩니다.
 
-`PreviewRenderer`는 독립 시연을 위한 흰 배경 구현입니다. 실제 PDF 배경, 레이어 보관, 부분 지우개, undo, PDF 저장은 이예린의 render 모듈로 교체합니다. 미리보기 지우개는 흰 배경 전용이며 실제 PDF에 흰 선을 덮는 방식으로 연결하면 안 됩니다. 형광펜은 프레임별 합성이라 같은 곳을 반복하면 진해집니다. 팀 main.py는 변경하지 않았고 실행은 위 모듈 명령을 사용합니다.
+`PreviewRenderer`는 독립 시연을 위한 흰 배경 구현입니다. `--pdf`에서는 `PDFRenderer` 어댑터가 이예린의 render 모듈을 사용합니다. PDF 저장 UI와 떨림 보정 연결은 별도입니다. 미리보기 지우개는 흰 배경 전용이며 실제 PDF에 흰 선을 덮는 방식으로 연결하면 안 됩니다. 형광펜은 프레임별 합성이라 같은 곳을 반복하면 진해집니다. 팀 main.py는 변경하지 않았고 실행은 위 모듈 명령을 사용합니다.
 
 ## 확인 후 브랜치 업로드
 
@@ -100,12 +100,12 @@ git push origin features/coordinate-ui
 ## 구현 시 검증 기록
 
 - 저장소 전용 Python 3.12 환경: MediaPipe 0.10.21 / OpenCV 4.11.0 / NumPy 1.26.4.
-- `unittest discover -s tests -v`: 13개 모두 통과.
+- 최신 검증: `unittest discover -s tests -v` 전체 49개 통과 (좌표·UI·보정·렌더링·UI/PDF 연결).
 - 가상 손 headless 120프레임 처리: 정상 종료.
 - OpenCV 가상 손 창 30프레임 시작·자동 종료: 정상.
 - 팀 HandTracker가 실제 모델을 로드하고 빈 영상 프레임을 처리한 뒤 GestureRecognizer → UI 어댑터 연결: 정상 (position=None).
 - `pip check`: 패키지 충돌 없음.
-- 실제 손/실제 웹캠의 인식 품질과 캘리브레이션 오차, 모든 UI 수동 조작, PDF 통합은 아직 검증하지 않았습니다.
+- 사용자 웹캠 확인: 핀치, 영역 제한, 팔레트, 페이지 명령, 박수 전환. 박수는 인식이 불안정한 경우가 있습니다. 실제 강의 PDF의 표시·페이지별 필기·배경 보존은 자동 실행으로 확인했으며, 웹캠/PDF 조합의 수동 검증과 정량 성능 평가는 별도입니다.
 
 ## UI 사용성 업데이트
 
@@ -114,3 +114,30 @@ git push origin features/coordinate-ui
 - 좌우 반전된 카메라 화면 기준 왼쪽 스와이프/왼쪽 방향키는 이전, 오른쪽은 다음입니다. 첫 페이지에서 이전으로 이동할 수 없으면 상태줄에 안내합니다.
 - 설정 화면 S에서 R을 누르면 기본 제스처 매핑으로 복원합니다. Enter로 저장하고 Esc로 취소합니다.
 - 유지되는 제스처를 도구 토글에 연결해도 제스처가 끝날 때까지 한 번만 전환합니다.
+
+## PDF와 함께 확인하기
+
+```powershell
+.\.venv\Scripts\python.exe -m airboard.ui.demo --pdf "C:\Users\justi\Downloads\11. lecture-Segmentation.pdf"
+# 전체 화면
+.\.venv\Scripts\python.exe -m airboard.ui.demo --pdf "C:\Users\justi\Downloads\11. lecture-Segmentation.pdf" --fullscreen
+```
+
+기본 창은 1600×900이며 크기 조절이 가능합니다. PDF 모드에서는 카메라 패널을 줄이고 PDF 표시 영역을 넓힙니다.
+스와이프 또는 방향키로 실제 PDF 페이지가 바뀌고, 페이지별 필기가 보존됩니다. X는 현재 페이지 필기만 지우며 PDF 원본은 유지합니다.
+도구 전환은 제스처로만 합니다. PDF를 지정하지 않으면 기존 흰 배경 데모입니다.
+이 연결은 좌표·UI→PDF 렌더러 통합이며, 떨림 보정은 아직 연결하지 않았습니다. 필기는 실행 중에만 유지되며 종료 시 자동 저장하지 않습니다.
+외부 PDF 경로를 직접 지정할 수 있습니다. 팀 테스트용 분할 자료는 아래 별도 경로로 포함했습니다.
+
+- 일반 화면에서 `R`: 캘리브레이션을 기본 사각형으로 복원하고 저장합니다. PDF 페이지 크기와 기존 필기는 유지되며, 핀치를 해제한 뒤 다시 쓰세요. 설정 화면 안의 `R`은 제스처 매핑 복원입니다.
+- 설정 저장 성공 문구는 하단에 표시하지 않습니다.
+
+## 저장소에 포함된 팀 테스트 PDF
+
+`data/pdfs/ui-test/README.md`에 분할 파일과 수동 검증 순서를 정리했습니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m airboard.ui.demo --pdf data/pdfs/ui-test/segmentation-p01-15.pdf
+```
+
+사용자가 요청한 분할 테스트 PDF 세 개만 `.gitignore` 예외로 포함합니다. 개인 캘리브레이션·제스처 설정은 계속 제외됩니다.

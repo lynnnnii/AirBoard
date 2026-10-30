@@ -9,7 +9,7 @@ from airboard.calibration import Calibration
 from airboard.ui.settings import Settings, ROOT
 from airboard.ui.controller import UIController, InputState, from_gesture_result
 from airboard.ui.overlay import Overlay
-from airboard.ui.demo import PreviewRenderer, compose_screen, draw_settings
+from airboard.ui.demo import PreviewRenderer, compose_screen, draw_settings, reset_calibration
 
 
 class CoordinateTests(unittest.TestCase):
@@ -113,6 +113,23 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.settings.mapping,before)
         np.testing.assert_array_equal(image[0,0],[32,32,32])
         self.assertTrue(np.any(image[:150] == 255))
+
+    def test_reset_calibration_persists_and_requires_lift(self) -> None:
+        """리셋 후 기본 꼭짓점·현재 크기를 저장하고 누른 채 필기 재개를 막는다."""
+        self.c.calibration = Calibration([[0,0],[1,0],[1,1],[0,1]],(1280,720))
+        self.frame('PINCH')
+        renderer = PreviewRenderer((1280,720))
+        renderer.previous = (10,10)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'cal.json'
+            reset_calibration(self.c,renderer,self.settings.ui['default_corners'],path)
+            saved = Calibration.load(path)
+            np.testing.assert_allclose(saved.corners,self.settings.ui['default_corners'])
+            self.assertEqual(saved.size,(1280,720))
+        self.assertIsNone(renderer.previous)
+        self.assertFalse(self.frame('PINCH').active)
+        self.frame()
+        self.assertTrue(self.frame('PINCH').active)
 
     def test_footer_is_outside_ink(self) -> None:
         """필기와 카메라를 보존하고 별도의 불투명 상태줄을 덧붙인다."""

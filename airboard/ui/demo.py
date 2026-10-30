@@ -1,4 +1,4 @@
-"""임준서 파트 실행 어댑터. 팀 main.py 및 render 모듈과 독립적이다."""
+"""좌표 변환 및 UI 데모. --pdf로 팀 PDF 렌더러를 연결한다."""
 import argparse
 import math
 import time
@@ -36,8 +36,39 @@ class PreviewRenderer:
         return self.ink.copy()
 
 
+class PDFRenderer:
+    """UI 패킷을 팀 PDF 렌더러의 공개 API에 연결한다."""
+    def __init__(self, path: str, config: object) -> None:
+        from airboard.render import AirBoardRenderer
+        self.board = AirBoardRenderer(path, config)
+
+    def consume(self, packet: object) -> np.ndarray:
+        """도구와 획 종료를 반영하고 UI 없는 PDF 이미지를 반환한다."""
+        if packet.phase in ('down', 'up'):
+            self.board.end_stroke()
+        self.board.update(packet.position, packet.tool, packet.active,
+                          eraser_active=packet.active and packet.tool=='eraser',
+                          color=packet.color,
+                          width=30 if packet.tool=='eraser' else packet.width*4 if packet.tool=='highlighter' else packet.width)
+        return self.board.render_page()
+
+
+def reset_calibration(controller: UIController, renderer: object,
+                      corners: list, path: object) -> None:
+    """기본 영역을 저장하고 현재 획을 종료해 새 좌표계로 연결되지 않게 한다."""
+    candidate = Calibration(corners, controller.calibration.size)
+    candidate.save(path)
+    if isinstance(renderer, PDFRenderer):
+        renderer.board.end_stroke()
+    else:
+        renderer.previous = None
+    controller.calibration = candidate
+    controller.active = False
+    controller.blocked = True
+
+
 def compose_screen(camera: np.ndarray, slide: np.ndarray, page: int,
-                   tool: str, message: str = '') -> np.ndarray:
+                   tool: str, message: str = '', page_count: int | None = None) -> np.ndarray:
     """필기 영역 아래에 불투명 상태줄에 페이지와 도구 상태를 표시한다."""
     height = max(camera.shape[0], slide.shape[0])
     width = camera.shape[1] + slide.shape[1]
@@ -45,8 +76,9 @@ def compose_screen(camera: np.ndarray, slide: np.ndarray, page: int,
     screen[:camera.shape[0], :camera.shape[1]] = camera
     screen[:slide.shape[0], camera.shape[1]:] = slide
     screen[height:] = (32, 32, 32)
-    lines = [f'PREVIEW PAGE {page} (no PDF) | TOOL: {tool.upper()} | {message}',
-             'S Settings  C Set writing area  X Clear  Q Quit']
+    page_label = f'PDF PAGE {page}/{page_count}' if page_count is not None else f'PREVIEW PAGE {page} (no PDF)'
+    lines = [f'{page_label} | TOOL: {tool.upper()} | {message}',
+             'S Settings  C Set area  R Reset area  X Clear  Q Quit']
     for i, line in enumerate(lines):
         cv2.putText(screen, line, (16, height + 28 + i * 34),
                     cv2.FONT_HERSHEY_SIMPLEX, .65, (255, 255, 255), 2, cv2.LINE_AA)
@@ -77,6 +109,8 @@ def main() -> None:
     sources.add_argument('--mouse',action='store_true')
     sources.add_argument('--virtual',action='store_true')
     sources.add_argument('--video')
+    parser.add_argument('--pdf', help='PDF file to display and annotate')
+    parser.add_argument('--fullscreen', action='store_true')
     parser.add_argument('--camera-index',type=int,default=0)
     parser.add_argument('--headless',action='store_true')
     parser.add_argument('--frames',type=int,default=0)
@@ -87,8 +121,33 @@ def main() -> None:
     size = tuple(settings.ui['slide_size'])
     calfile = ROOT/'config/calibration-user.json'
     calibration = Calibration.load(calfile) if calfile.exists() else Calibration(settings.ui['default_corners'],size)
+    renderer = PreviewRenderer(calibration.size)
+    if args.pdf:
+        from dataclasses import replace
+        from airboard.render import RenderConfig
+        cfg = replace(RenderConfig.from_json(ROOT/'config/default.json'), max_width=1280, max_height=720)
+        renderer = PDFRenderer(args.pdf, cfg)
+        calibration = Calibration(calibration.corners.tolist(), renderer.board.slide_size)
     controller = UIController(calibration,settings)
-    overlay,renderer = Overlay(settings),PreviewRenderer(calibration.size)
+    overlay = Overlay(settings)
+    camera_width, camera_height = (384,288) if args.pdf else (640,480)
+
+    def move_page(offset: int) -> str:
+        """실제 페이지를 이동하고 페이지 크기에 맞춰 좌표 변환을 갱신한다."""
+        nonlocal page
+        previous_page = page
+        if args.pdf:
+            renderer.board.change_page(offset)
+            page = renderer.board.current_page+1
+            controller.calibration = Calibration(controller.calibration.corners.tolist(),renderer.board.slide_size)
+            controller.active = False
+            controller.blocked = True
+        else:
+            page = max(1,page+offset)
+            renderer.previous = None
+        if page == previous_page:
+            return 'Page boundary reached'
+        return ('NEXT' if offset>0 else 'PREVIOUS') + f': {previous_page} -> {page}'
     cap,tracker = None,None
     mouse = {'position':None,'down':False}
     calibration_points = None
@@ -98,7 +157,7 @@ def main() -> None:
 
     def mouse_event(kind: int, x: int, y: int, flags: int, param: object) -> None:
         """왼쪽 640×480 입력 패널의 마우스를 카메라 정규화 좌표로 해석."""
-        mouse['position'] = (x/639,y/479) if 0<=x<640 and 0<=y<480 else None
+        mouse['position'] = (x/(camera_width-1),y/(camera_height-1)) if 0<=x<camera_width and 0<=y<camera_height else None
         if kind==cv2.EVENT_LBUTTONDOWN:
             mouse['down'] = True
             if calibration_points is not None and mouse['position'] is not None:
@@ -118,7 +177,9 @@ def main() -> None:
             tracker,recognizer = HandTracker(),GestureRecognizer()
         if not args.headless:
             cv2.namedWindow('AirBoard UI demo',cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('AirBoard UI demo',1200,464)
+            cv2.resizeWindow('AirBoard UI demo',1600,900)
+            if args.fullscreen:
+                cv2.setWindowProperty('AirBoard UI demo',cv2.WND_PROP_FULLSCREEN,cv2.WINDOW_FULLSCREEN)
             cv2.setMouseCallback('AirBoard UI demo',mouse_event)
         frame_number = 0
         while True:
@@ -156,11 +217,7 @@ def main() -> None:
                 setattr(controller,*selected)
             packet = controller.update(state,now,suppressed=editing or calibration_points is not None or overlay.target is not None)
             for command in packet.commands:
-                previous_page = page
-                page = max(1,page+(1 if command=='page_next' else -1))
-                message = ('NEXT' if command=='page_next' else 'PREVIOUS') + f': {previous_page} -> {page}'
-                if page == previous_page:
-                    message = 'Already at first page'
+                message = move_page(1 if command=='page_next' else -1)
             slide = renderer.consume(packet)
             notice = controller.notification if now<controller.notice_until else ''
             overlay.draw(slide,packet,notice)
@@ -183,7 +240,8 @@ def main() -> None:
                 break
             if args.headless:
                 continue
-            screen = compose_screen(camera, slide, page, packet.tool, message)
+            screen = compose_screen(cv2.resize(camera,(camera_width,camera_height)), slide, page, packet.tool, message,
+                                    renderer.board.page_count if args.pdf else None)
             cv2.imshow('AirBoard UI demo',screen)
             key = cv2.waitKeyEx(16)
             if key==ord('q') or cv2.getWindowProperty('AirBoard UI demo',cv2.WND_PROP_VISIBLE)<1:
@@ -205,7 +263,7 @@ def main() -> None:
                     try:
                         settings.save()
                         editing = False
-                        message = 'Gesture mapping saved; tools controlled by gestures'
+                        message = ''
                     except (ValueError,OSError) as exc:
                         message = str(exc)
                 elif key==27:
@@ -216,20 +274,32 @@ def main() -> None:
                 break
             if key==ord('c'):
                 calibration_points = []
+            elif key==ord('r'):
+                try:
+                    reset_calibration(controller,renderer,settings.ui['default_corners'],calfile)
+                    calibration_points = None
+                    overlay.dwell(None,time.monotonic())
+                    message = ''
+                except (OSError,ValueError) as exc:
+                    message = f'Reset failed: {exc}'
             elif key==32 and calibration_points is not None and state.position is not None:
                 calibration_points.append(state.position)
             elif key==ord('s'):
                 backup = settings.mapping.copy()
                 editing,row = True,0
             elif key in (left,right):
-                previous_page = page
-                page = max(1,page+(-1 if key==left else 1))
-                message = ('PREVIOUS' if key==left else 'NEXT') + f': {previous_page} -> {page}'
-                if page == previous_page:
-                    message = 'Already at first page'
+                message = move_page(-1 if key==left else 1)
             elif key==ord('x'):
-                renderer.ink[:] = 255
+                if args.pdf:
+                    renderer.board.clear_page()
+                else:
+                    renderer.ink[:] = 255
+                    renderer.previous = None
+                controller.active = False
+                controller.blocked = True
     finally:
+        if args.pdf:
+            renderer.board.close()
         if tracker:
             tracker.close()
         if cap is not None:

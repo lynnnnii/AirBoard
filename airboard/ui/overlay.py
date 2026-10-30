@@ -47,4 +47,3 @@ class Overlay:
         if packet.position:
             p = tuple(round(v) for v in packet.position)
             cv2.circle(image,p,15 if packet.tool=='eraser' else 7,(0,0,255) if packet.active else (255,100,0),2)
-        cv2.putText(image,f'{packet.tool} / {packet.phase}  {notice}',(12,80),cv2.FONT_HERSHEY_SIMPLEX,.65,(40,40,180),2)

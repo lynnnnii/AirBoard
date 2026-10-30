@@ -13,3 +13,13 @@ outputs/
 config/ui-user.json
 config/ui-user.tmp
 config/calibration-user.json
+
+# 팀 UI 검증용으로 요청된 분할 PDF만 포함
+!data/pdfs/
+data/pdfs/*
+!data/pdfs/ui-test/
+data/pdfs/ui-test/*
+!data/pdfs/ui-test/README.md
+!data/pdfs/ui-test/segmentation-p01-15.pdf
+!data/pdfs/ui-test/segmentation-p16-30.pdf
+!data/pdfs/ui-test/segmentation-p31-44.pdf
