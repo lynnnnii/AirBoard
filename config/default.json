@@ -7,5 +7,16 @@
     "one_euro_d_cutoff": 1.0,
     "start_skip": 2,
     "end_trim": 3
+  },
+  "render": {
+    "max_width": 1280,
+    "max_height": 640,
+    "cache_pages": 3,
+    "pen_color": "#FF3030",
+    "pen_width": 4.0,
+    "highlighter_color": "#FFFF00",
+    "highlighter_width": 24.0,
+    "highlighter_opacity": 0.3,
+    "eraser_width": 40.0
   }
 }

@@ -1,1 +1,5 @@
-{}
+{
+  "DOUBLE_CLAP": "toggle_highlighter",
+  "SWIPE_RIGHT": "page_next",
+  "SWIPE_LEFT": "page_prev"
+}
