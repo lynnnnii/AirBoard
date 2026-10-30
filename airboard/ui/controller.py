@@ -9,6 +9,7 @@ class InputState:
     """정규화 카메라 좌표와 프레임별 제스처 이름. 이벤트는 발생 프레임만 전달."""
     position: tuple[float,float] | None
     gestures: frozenset[str] = frozenset()
+    navigation_allowed: bool = True
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,8 @@ def from_gesture_result(result: object, frame_size: tuple[int,int]) -> InputStat
         gestures.add(result.pose)
     p = result.pointer_point if result.pose in ('FIST','POINTER') else result.pen_point
     # 손 소실 프레임에서도 DOUBLE_CLAP 같은 이미 판정된 이벤트는 보존한다.
-    return InputState(None if p is None else (float(p[0])/(w-1),float(p[1])/(h-1)),frozenset(gestures))
+    return InputState(None if p is None else (float(p[0])/(w-1),float(p[1])/(h-1)),frozenset(gestures),
+                      len(result.hands)==1 and result.pose not in ('PINCH','FIST','POINTER') and not result.pen_down)
 
 
 class UIController:
@@ -51,10 +53,16 @@ class UIController:
         self.candidate,self.count = None,0
         self.notification,self.notice_until = '',0.
         self._toggle_held = False
+        self._page_blocked_until = float('-inf')
+        self._pending_page = None
+        self.navigation_status = 'ready'
 
-    def update(self, state: InputState, now: float, suppressed: bool = False) -> RenderPacket:
+    def update(self, state: InputState, now: float, suppressed: bool = False, navigation_suppressed: bool | None = None) -> RenderPacket:
         """매 프레임 호출. 팔레트·설정·캘리브레이션 중에는 suppressed=True."""
-        actions = set() if suppressed else {self.settings.mapping.get(g,'none') for g in state.gestures}
+        mapped = {self.settings.mapping.get(g,'none') for g in state.gestures}
+        nav_suppressed = suppressed if navigation_suppressed is None else navigation_suppressed
+        actions = (mapped if not suppressed else
+                   mapped & {'toggle_highlighter'} if not nav_suppressed else set())
         previous_tool = self.tool
         wanted = 'eraser' if 'eraser' in actions else 'pointer' if 'pointer' in actions else None
         if wanted == self.candidate:
@@ -71,7 +79,7 @@ class UIController:
             self.blocked = False
         # 일회성 이벤트는 입력 계약에 따라 발생 프레임에만 실행한다.
         toggle = 'toggle_highlighter' in actions
-        if toggle and not self._toggle_held and not wanted and not self.active:
+        if toggle and not self._toggle_held and not wanted and 'draw' not in actions:
             self.base_tool = 'pen' if self.base_tool=='highlighter' else 'highlighter'
         self._toggle_held = toggle
         self.tool = self.temporary or self.base_tool
@@ -82,7 +90,32 @@ class UIController:
         if self.active and self.tool != previous_tool:
             active = False
         phase = 'move' if active and self.active else 'down' if active else 'up' if self.active else 'hover'
-        commands = tuple(a for a in ('page_next','page_prev') if a in actions) if not active and not self.active and not wanted else ()
+        quiet = self.settings.ui.get('navigation_quiet_seconds', .15)
+        unsafe = (nav_suppressed or active or self.active or wanted or toggle
+                  or not state.navigation_allowed or 'draw' in mapped)
+        page_actions = mapped & {'page_next','page_prev'}
+        commands = ()
+        if unsafe:
+            self._page_blocked_until = now + quiet
+            self._pending_page = None
+            self.navigation_status = ('settings/palette' if nav_suppressed else
+                                      'writing/tool' if active or self.active or wanted or toggle or 'draw' in mapped
+                                      else 'need one open hand')
+        else:
+            if len(page_actions)>1:
+                self._pending_page = None
+            elif len(page_actions)==1:
+                # 모드 해제 직후 단발 이벤트가 발생하면 짧게 보관한다.
+                if self._page_blocked_until-now <= quiet:
+                    self._pending_page = (next(iter(page_actions)), now + .35)
+            if self._pending_page is not None and now>self._pending_page[1]:
+                self._pending_page = None
+            if self._pending_page is not None and now>=self._page_blocked_until:
+                commands = (self._pending_page[0],)
+                self._pending_page = None
+                self._page_blocked_until = now + self.settings.ui.get('navigation_cooldown_seconds', .8)
+            self.navigation_status = ('page moved' if commands else 'waiting' if self._pending_page
+                                      else 'cooldown' if now<self._page_blocked_until else 'ready')
         self.active = bool(active)
         return RenderPacket(pos,self.tool,bool(active),phase,self.color,self.width,
                             self.settings.ui['highlighter_opacity'] if self.tool=='highlighter' else 1.,commands)

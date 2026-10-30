@@ -61,7 +61,7 @@ class UIPDFTests(unittest.TestCase):
                     captured=[]
                     real_renderer=demo.PDFRenderer
                     def make_renderer(*args,**kwargs):
-                        renderer=real_renderer(*args,state_dir=Path(folder)/('state-video' if source else 'state-camera'))
+                        renderer=real_renderer(*args,state_dir=Path(folder)/('state-video' if source else 'state-camera'),smoothing_config=kwargs.get('smoothing_config'))
                         renderer.board.close=MagicMock(wraps=renderer.board.close)
                         captured.append(renderer)
                         return renderer

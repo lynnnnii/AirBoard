@@ -154,18 +154,36 @@ def classify_pose(lm, curls, tips=None):
 class PinchDetector:
     """히스테리시스 + 프레임 디바운스로 Pen Down / Pen Up 판정."""
 
-    def __init__(self):
+    def __init__(self, config=None):
+        self.config = {**CFG, **(config or {})}
         self.down = False
         self.count = 0
+        self.armed = True
 
-    def update(self, ratio, blocked=False):
-        if ratio is None or blocked:          # 손이 사라지거나 주먹이면 즉시 펜 들기
+    def update(self, ratio, blocked=False, observe_release=False):
+        if ratio is None or not np.isfinite(ratio):
             self.down, self.count = False, 0
-            return self.down
-        want = (ratio < CFG["pinch_on"]) if not self.down else not (ratio > CFG["pinch_off"])
+            self.armed = False
+            return False
+        if blocked:
+            self.down, self.count = False, 0
+            if observe_release:
+                self.armed = self.armed or ratio>self.config['pinch_off']
+            else:
+                self.armed = False
+            return False
+        if not self.armed:
+            if ratio > self.config['pinch_off']:
+                self.armed = True
+            return False
+        if self.down and ratio>=self.config.get('pinch_immediate_off',float('inf')):
+            self.down,self.count=False,0
+            return False
+        want = (ratio < self.config['pinch_on']) if not self.down else not (ratio > self.config['pinch_off'])
         if want != self.down:
             self.count += 1
-            if self.count >= CFG["pinch_frames"]:
+            key = 'pinch_on_frames' if want else 'pinch_off_frames'
+            if self.count >= self.config.get(key,self.config['pinch_frames']):
                 self.down, self.count = want, 0
         else:
             self.count = 0
@@ -179,49 +197,64 @@ class ClapDetector:
     그래서 '직전에 두 손이 가까이 있었는데 갑자기 손이 사라짐'도 맞닿음으로 처리한다.
     """
 
-    def __init__(self):
+    def __init__(self, config=None):
+        self.config = {**CFG, **(config or {})}
         self.touching = False
-        self.last_d = None          # 마지막으로 두 손이 보였을 때의 거리
-        self.last_near_t = -1e9     # 두 손이 clap_near 안에 있었던 마지막 시각
+        self.last_d = None
+        self.last_near_t = -1e9
         self.claps = deque()
-        self.cooldown_until = 0.0
+        self.cooldown_until = 0.
+        self.armed = False
+        self.open_distance = 0.
+        self.approaching = False
 
-    def _register_touch(self, t):
-        if not self.touching:
-            self.touching = True
-            if not self.claps or t - self.claps[-1] > CFG["clap_min_gap"]:
-                self.claps.append(t)
+    def _register_touch(self,t):
+        if not self.armed or self.touching:
+            return
+        self.armed=False
+        self.touching=True
+        if not self.claps or t-self.claps[-1]>self.config['clap_min_gap']:
+            self.claps.append(t)
 
-    def update(self, hands, t):
-        if t < self.cooldown_until:
-            self.touching = False
-            return False
-
-        if len(hands) >= 2:
-            a, b = hands[0], hands[1]
-            scale = (palm_size(a) + palm_size(b)) / 2
-            d = dist(palm_center(a), palm_center(b)) / scale
-            self.last_d = d
-            if d < CFG["clap_near"]:
-                self.last_near_t = t
-            if d < CFG["clap_close"]:
-                self._register_touch(t)
-            elif d > CFG["clap_open"]:
-                self.touching = False
-        else:
-            # 손이 1개 이하로 보임: 방금 전까지 두 손이 가까이 있었다면 겹쳐서 안 보이는 것
-            if t - self.last_near_t < CFG["clap_grace"]:
-                self._register_touch(t)
-            else:
-                self.touching = False
-                self.last_d = None
-
-        while self.claps and t - self.claps[0] > CFG["clap_window"]:
+    def update(self,hands,t):
+        cfg=self.config
+        while self.claps and t-self.claps[0]>cfg['clap_window']:
             self.claps.popleft()
-        if len(self.claps) >= 2:
+        if t<self.cooldown_until:
+            return False
+        if len(hands)>=2:
+            a,b=hands[:2]
+            scale=(palm_size(a)+palm_size(b))/2
+            d=dist(palm_center(a),palm_center(b))/scale
+            self.last_d=d
+            if d>cfg['clap_open']:
+                if not self.armed:
+                    self.open_distance=d
+                else:
+                    self.open_distance=max(self.open_distance,d)
+                self.armed=True
+                self.touching=False
+                self.approaching=self.open_distance-d>=cfg.get('clap_approach_drop',.35)
+            elif self.armed:
+                self.approaching=self.open_distance-d>=cfg.get('clap_approach_drop',.35)
+                if d<cfg['clap_close'] and self.approaching:
+                    self._register_touch(t)
+            if d<cfg['clap_near']:
+                self.last_near_t=t
+        elif (t-self.last_near_t<cfg['clap_grace'] and self.armed
+              and (self.approaching or (self.last_d is not None
+                   and self.last_d<cfg.get('clap_occlusion_close',2.5)))):
+            # 양손이 가까워지다 가려진 경우만 접촉으로 인정한다.
+            self._register_touch(t)
+        elif t-self.last_near_t>=cfg.get('clap_reacquire_seconds',.85):
+            self.armed=False
+            self.approaching=False
+            self.last_d=None
+        if len(self.claps)>=2:
             self.claps.clear()
-            self.touching = False
-            self.cooldown_until = t + CFG["clap_cooldown"]
+            self.armed=False
+            self.touching=False
+            self.cooldown_until=t+cfg['clap_cooldown']
             return True
         return False
 
@@ -231,36 +264,43 @@ class SwipeDetector:
 
     인식률을 높이기 위한 처리
       - 손목 대신 손바닥 중심을 추적 (더 안정적)
-      - 빠르게 움직이면 손가락이 흐려져 '편 손'이 몇 프레임 깨지므로, 시간 창 안에서 60% 이상만 펴져 있으면 인정
-      - 빠른 움직임 때문에 손을 잠깐 놓쳐도 0.25초까지는 기록을 지우지 않음
+      - 펼친 한 손의 이동을 판정하며 도구 동작/손 소실 시 이력을 초기화
+      - 짧은 손가락 검출 흔들림은 허용하지만 해당 프레임 좌표는 기록하지 않음
+      - 재입력 방지 시간의 이동은 다음 스와이프 이력에 포함하지 않음
       - 세로 이동은 절대값이 아니라 가로 이동 대비 비율로 제한 (약간 대각선이어도 인정)
     """
 
-    def __init__(self):
+    def __init__(self, config=None):
+        self.config = {**CFG, **(config or {})}
         self.hist = deque()          # (t, x, y, is_open)
         self.last_seen = -1e9
         self.cooldown_until = 0.0
 
     def update(self, point, is_open, frame_w, frame_h, t):
-        if point is None:
-            if t - self.last_seen > CFG["swipe_lost_grace"]:
+        # 도구 동작·양손·손 소실 구간의 이동을 스와이프 이력에 섞지 않는다.
+        if point is None or t < self.cooldown_until:
+            self.hist.clear()
+            return None
+        if not is_open:
+            # 잠깐의 손가락 검출 흔들림은 넘기되 도구 입력은 호출자가 None으로 차단한다.
+            if t-self.last_seen > self.config.get('swipe_open_grace', .1):
                 self.hist.clear()
             return None
         self.last_seen = t
         self.hist.append((t, point[0] / frame_w, point[1] / frame_h, bool(is_open)))
-        while self.hist and t - self.hist[0][0] > CFG["swipe_window"]:
+        while self.hist and t - self.hist[0][0] > self.config["swipe_window"]:
             self.hist.popleft()
         if t < self.cooldown_until or len(self.hist) < 3:
             return None
 
         open_ratio = sum(h[3] for h in self.hist) / len(self.hist)
-        if open_ratio < CFG["swipe_open_ratio"]:
+        if open_ratio < self.config["swipe_open_ratio"]:
             return None
         dx = self.hist[-1][1] - self.hist[0][1]
         dy = abs(self.hist[-1][2] - self.hist[0][2])
-        if abs(dx) > CFG["swipe_dist"] and dy < CFG["swipe_max_slope"] * abs(dx):
+        if abs(dx) > self.config["swipe_dist"] and dy < self.config["swipe_max_slope"] * abs(dx):
             self.hist.clear()
-            self.cooldown_until = t + CFG["swipe_cooldown"]
+            self.cooldown_until = t + self.config["swipe_cooldown"]
             return "SWIPE_RIGHT" if dx > 0 else "SWIPE_LEFT"
         return None
 
@@ -283,11 +323,15 @@ class GestureResult:
 class GestureRecognizer:
     """랜드마크 리스트를 받아 프레임마다 GestureResult를 낸다."""
 
-    def __init__(self):
-        self.pinch = PinchDetector()
-        self.clap = ClapDetector()
-        self.swipe = SwipeDetector()
+    def __init__(self, config=None):
+        self.pinch = PinchDetector(config)
+        self.config = {**CFG, **(config or {})}
+        self.clap = ClapDetector(config)
+        self._swipe_blocked_until = 0.
+        self._ink_blocked_until = 0.
+        self.swipe = SwipeDetector(config)
         self.fist_count = 0
+        self._last_ink_point = None
 
     def update(self, hands, frame_w, frame_h, t):
         """hands: HandTracker.detect() 결과 (손마다 (21,3) 픽셀 좌표). t: 초 단위 시각."""
@@ -296,9 +340,16 @@ class GestureRecognizer:
         # 박수는 양손 정보로 먼저 판단
         if self.clap.update(hands, t):
             r.events.append("DOUBLE_CLAP")
+        if len(hands)>=2 or 'DOUBLE_CLAP' in r.events:
+            self._swipe_blocked_until=t+self.config.get('clap_swipe_guard',.7)
+            self._ink_blocked_until=t+self.config.get('clap_ink_guard',.12)
+        ink_busy=(len(hands)>=2 or t<self._ink_blocked_until)
+        clap_busy=(len(hands)>=2 or bool(self.clap.claps)
+                   or t<self.clap.cooldown_until or t<self._swipe_blocked_until)
 
         if not hands:
             self.pinch.update(None)
+            self._last_ink_point = None
             self.fist_count = 0
             self.swipe.update(None, False, frame_w, frame_h, t)
             r.debug = {"hand_count": 0, "clap_touch": self.clap.touching, "clap_count": len(self.clap.claps)}
@@ -312,32 +363,61 @@ class GestureRecognizer:
         pose = classify_pose(lm, curls, tips)
         ratio = pinch_ratio(lm)
 
-        # 주먹은 몇 프레임 유지돼야 인정
-        self.fist_count = self.fist_count + 1 if pose == "FIST" else 0
-        is_fist = self.fist_count >= CFG["fist_frames"]
+        # 쓰는 중 닫힌 핀치는 유지한다. 지우개 전환은 pen-up 후에만 허용한다.
+        if (pose=='FIST' and self.pinch.down
+                and ratio<=self.pinch.config['pinch_off']):
+            pose='NONE'
+        # 핀치한 손의 나머지 손가락을 접는 자세와 주먹을 구분한다.
+        if pose=='FIST' and tips['index']>self.config.get('fist_index_fold',.65):
+            pose='NONE'
+        fist_candidate = pose=="FIST"
+        self.fist_count = self.fist_count + 1 if fist_candidate else 0
+        is_fist = self.fist_count >= self.config.get('fist_frames',CFG['fist_frames'])
         if pose == "FIST" and not is_fist:
             pose = "NONE"
 
         # 양손이 보이면(박수 중일 수 있음) 필기를 막는다
-        r.pen_down = self.pinch.update(ratio, blocked=(pose == "FIST" or len(hands) >= 2))
+        r.pen_down = self.pinch.update(
+            ratio, blocked=(pose == "FIST" or ink_busy or (fist_candidate and not self.pinch.down)),
+            observe_release=(ink_busy and len(hands)==1 and not fist_candidate))
         if r.pen_down:
             pose = "PINCH"
+        if ink_busy:
+            pose = 'NONE'
         r.pose = pose
 
         r.pen_point = tuple(((lm[THUMB_TIP, :2] + lm[INDEX_TIP, :2]) / 2).astype(int))
+        # 해제 확인 중에는 손 이동을 잉크에 추가하지 않는다.
+        if r.pen_down:
+            if self.pinch.count>0 and self._last_ink_point is not None:
+                r.pen_point = self._last_ink_point
+            else:
+                self._last_ink_point = r.pen_point
+        else:
+            self._last_ink_point = None
         r.pointer_point = tuple(lm[INDEX_TIP, :2].astype(int)) if pose != "FIST" \
             else tuple(palm_center(lm).astype(int))
 
         # 양손이 보이면(박수 중일 수 있음) 스와이프도 막는다. 박수 때 손 위치가 튀면서 스와이프로 오인되는 것 방지
-        n_open = sum(v > CFG["swipe_open_curl"] for v in curls.values())
-        swipe_ok = (len(hands) == 1 and pose not in ("PINCH", "FIST", "POINTER")
+        n_open = sum(curls[name] > CFG['swipe_open_curl'] or
+                     dist(lm[WRIST,:2],lm[tip,:2]) > 1.08*dist(lm[WRIST,:2],lm[tip-2,:2])
+                     for name,(_,tip) in FINGERS.items())
+        swipe_ok = (not clap_busy and len(hands) == 1 and pose not in ("PINCH", "FIST", "POINTER")
                     and n_open >= CFG["swipe_open_fingers"])
-        sw = self.swipe.update(palm_center(lm) if len(hands) == 1 else None,
+        sw = self.swipe.update(palm_center(lm) if not clap_busy and len(hands) == 1 and pose not in ('PINCH','FIST','POINTER') else None,
                                swipe_ok, frame_w, frame_h, t)
         if sw:
             r.events.append(sw)
 
         r.debug = {"hand_count": len(hands),
+                   "swipe_open_count": n_open,
+                   "clap_ink_blocked": ink_busy,
+                   "clap_navigation_blocked": clap_busy,
+                   "pinch_armed": self.pinch.armed,
+                   "fist_confirm_frames": self.fist_count,
+                   "clap_count": len(self.clap.claps),
+                   "clap_armed": self.clap.armed,
+                   "clap_approaching": self.clap.approaching,
                    "pinch_ratio": round(ratio, 2),
                    "pinch_3d": round(dist(lm[THUMB_TIP], lm[INDEX_TIP]) / (dist(lm[WRIST], lm[MIDDLE_MCP]) + 1e-6), 2),
                    "index_reach": round(index_reach(lm), 2),

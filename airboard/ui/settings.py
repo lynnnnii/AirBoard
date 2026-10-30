@@ -40,8 +40,8 @@ class Settings:
             int(c[1:],16)
         if not self.ui['widths'] or any(type(w) is not int or not 1<=w<=40 for w in self.ui['widths']):
             raise ValueError('굵기는 1~40 정수입니다.')
-        for key in ('dwell_seconds','notification_seconds'):
-            if not 0<float(self.ui[key])<=10:
+        for key in ('dwell_seconds','notification_seconds','navigation_quiet_seconds','navigation_cooldown_seconds'):
+            if not 0<float(self.ui.get(key,.5))<=10:
                 raise ValueError('UI 시간은 0~10초 범위입니다.')
         if type(self.ui['tool_hold_frames']) is not int or not 1<=self.ui['tool_hold_frames']<=60:
             raise ValueError('도구 유지 프레임은 1~60입니다.')

@@ -2,6 +2,7 @@
 import argparse
 import math
 import time
+import json
 from pathlib import Path
 import cv2
 import numpy as np
@@ -39,10 +40,21 @@ class PreviewRenderer:
 
 class PDFRenderer:
     """UI 패킷을 팀 PDF 렌더러의 공개 API에 연결한다."""
-    def __init__(self, path: str, config: object, state_dir: Path | None = None) -> None:
+    def __init__(self, path: str, config: object, state_dir: Path | None = None, smoothing_config: dict | None = None) -> None:
         from airboard.render import AirBoardRenderer
         self.board = AirBoardRenderer(path, config)
         self.state_path = None if state_dir is None else Path(state_dir)/(self.board.document_key+'.json')
+        self.smoother = None
+        self._was_active = False
+        self.display_position = None
+        self._ink_style = None
+        self._last_tool = None
+        if smoothing_config is not None:
+            from airboard.smoothing.stroke import StrokeSmoother, make_filter
+            from airboard.render import SmoothedInkBridge
+            self.smoother = StrokeSmoother.from_config(smoothing_config)
+            self.cursor_filter = make_filter(smoothing_config['method'], smoothing_config)
+            self.bridge = SmoothedInkBridge(self.board)
         self._dirty = False
         self._last_save = time.monotonic()
         if self.state_path is not None and self.state_path.exists():
@@ -52,16 +64,52 @@ class PDFRenderer:
                 self.board.close()
                 raise
 
+    def finish_stroke(self) -> None:
+        """꼬리 제거를 적용해 진행 획을 확정한다. 지우개도 먼저 확정한다."""
+        if self.smoother is not None:
+            from airboard.render import InkStyle
+            if self._last_tool == 'eraser':
+                self.board.end_stroke()
+            self.bridge.consume(self.smoother.update(None,False,time.monotonic()),
+                                self._ink_style or InkStyle())
+            self.cursor_filter.reset()
+        self.board.end_stroke()
+        self._dirty = True
+
     def consume(self, packet: object) -> np.ndarray:
-        """도구와 획 종료를 반영하고 UI 없는 PDF 이미지를 반환한다."""
-        if packet.phase in ('down', 'up'):
-            self.board.end_stroke()
-        self.board.update(packet.position, packet.tool, packet.active,
-                          eraser_active=packet.active and packet.tool=='eraser',
-                          color=packet.color,
-                          width=30 if packet.tool=='eraser' else packet.width*4 if packet.tool=='highlighter' else packet.width)
-        if packet.active:
+        """PDF 좌표를 팀 보정기에 통과시켜 미리보기와 최종 획을 분리한다."""
+        self.display_position = packet.position
+        if self.smoother is None:
+            if packet.phase in ('down','up'):
+                self.board.end_stroke()
+            self.board.update(packet.position,packet.tool,packet.active,
+                              eraser_active=packet.active and packet.tool=='eraser',
+                              color=packet.color,
+                              width=30 if packet.tool=='eraser' else packet.width*4 if packet.tool=='highlighter' else packet.width)
+        else:
+            from airboard.render import InkStyle
+            now=time.monotonic()
+            if packet.tool != self._last_tool or packet.phase=='down':
+                self.finish_stroke()
+            self._last_tool=packet.tool
+            if packet.tool in ('pen','highlighter'):
+                self._ink_style=InkStyle(packet.tool,packet.color,packet.width*4 if packet.tool=='highlighter' else packet.width)
+                result=self.smoother.update(packet.position,packet.active,now)
+                self.bridge.consume(result,self._ink_style)
+                self.display_position=result.point
+            else:
+                if packet.position is None:
+                    self.cursor_filter.reset()
+                    point=None
+                else:
+                    point=tuple(float(v) for v in self.cursor_filter(packet.position,now))
+                self.display_position=point
+                self.board.update(point,packet.tool,False,
+                                  eraser_active=packet.active and packet.tool=='eraser',
+                                  color=packet.color,width=30)
+        if packet.active or self._was_active:
             self._dirty = True
+        self._was_active = packet.active
         self.checkpoint(force=not packet.active)
         return self.board.render_page()
 
@@ -74,12 +122,14 @@ class PDFRenderer:
 
     def change_page(self, offset: int) -> None:
         """페이지 변경과 직전 필기를 저장한다."""
+        self.finish_stroke()
         self.board.change_page(offset)
         self._dirty = True
         self.checkpoint(force=True)
 
     def clear_page(self) -> None:
         """지운 상태도 저장하여 재실행 시 지운 획이 나타나지 않게 한다."""
+        self.finish_stroke()
         self.board.clear_page()
         self._dirty = True
         self.checkpoint(force=True)
@@ -87,7 +137,7 @@ class PDFRenderer:
     def close(self) -> None:
         """종료 직전 진행 중 필기와 페이지를 저장하고 자원을 닫는다."""
         try:
-            self.board.end_stroke()
+            self.finish_stroke()
             self._dirty = True
             self.checkpoint(force=True)
         finally:
@@ -100,7 +150,7 @@ def reset_calibration(controller: UIController, renderer: object,
     candidate = Calibration(corners, controller.calibration.size)
     candidate.save(path)
     if isinstance(renderer, PDFRenderer):
-        renderer.board.end_stroke()
+        renderer.finish_stroke()
     else:
         renderer.previous = None
     controller.calibration = candidate
@@ -150,7 +200,10 @@ def main() -> None:
     sources.add_argument('--mouse',action='store_true')
     sources.add_argument('--virtual',action='store_true')
     sources.add_argument('--video')
+    parser.add_argument('--trace-gestures', action='store_true', help='Write numeric gesture trace locally without camera images')
+    parser.add_argument('--debug-gestures', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--pdf', help='PDF file to display and annotate')
+    parser.add_argument('--no-smoothing', action='store_true', help='Compare PDF input without smoothing or tail trimming')
     parser.add_argument('--fullscreen', action='store_true')
     parser.add_argument('--camera-index',type=int,default=0)
     parser.add_argument('--headless',action='store_true')
@@ -167,11 +220,14 @@ def main() -> None:
         from dataclasses import replace
         from airboard.render import RenderConfig
         cfg = replace(RenderConfig.from_json(ROOT/'config/default.json'), max_width=1280, max_height=720)
-        renderer = PDFRenderer(args.pdf, cfg, state_dir=ROOT/'data/sessions')
+        from airboard.smoothing.stroke import load_config
+        smoothing_cfg = None if args.no_smoothing else {**load_config(str(ROOT/'config/default.json')),
+                                                       **settings.ui.get('handwriting_smoothing',{})}
+        renderer = PDFRenderer(args.pdf, cfg, state_dir=ROOT/'data/sessions',smoothing_config=smoothing_cfg)
         calibration = Calibration(calibration.corners.tolist(), renderer.board.slide_size)
     controller = UIController(calibration,settings)
     overlay = Overlay(settings)
-    camera_width, camera_height = (384,288) if args.pdf else (640,480)
+    camera_width, camera_height = (512,384) if args.pdf else (640,480)
 
     def move_page(offset: int) -> str:
         """실제 페이지를 이동하고 페이지 크기에 맞춰 좌표 변환을 갱신한다."""
@@ -190,6 +246,7 @@ def main() -> None:
             return 'Page boundary reached'
         return ('NEXT' if offset>0 else 'PREVIOUS') + f': {previous_page} -> {page}'
     cap,tracker = None,None
+    trace_stream = None
     mouse = {'position':None,'down':False}
     calibration_points = None
     editing,row = False,0
@@ -208,6 +265,12 @@ def main() -> None:
             mouse['down'] = False
 
     try:
+        if args.trace_gestures:
+            trace_dir=ROOT/'data/diagnostics'
+            trace_dir.mkdir(parents=True,exist_ok=True)
+            trace_path=trace_dir/f'gestures-{time.time_ns()}.jsonl'
+            trace_stream=trace_path.open('w',encoding='utf-8')
+            print(f'Gesture trace: {trace_path}')
         if not args.mouse and not args.virtual:
             from airboard.input.camera import open_camera
             from airboard.tracking.hand_tracker import HandTracker
@@ -215,10 +278,14 @@ def main() -> None:
             cap = cv2.VideoCapture(args.video) if args.video else open_camera(args.camera_index)
             if cap is None or not cap.isOpened():
                 raise RuntimeError('Camera unavailable. Close other apps, check permissions or use --camera-index 1 / --mouse.')
-            tracker,recognizer = HandTracker(),GestureRecognizer()
+            from .settings import read_json
+            all_cfg = read_json(ROOT/'config/default.json')
+            gesture_cfg = all_cfg.get('gestures',{})
+            tracker = HandTracker(detection_confidence=all_cfg.get('tracking',{}).get('detection_confidence',.5))
+            recognizer = GestureRecognizer(gesture_cfg)
         if not args.headless:
             cv2.namedWindow('AirBoard UI demo',cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('AirBoard UI demo',1600,900)
+            cv2.resizeWindow('AirBoard UI demo',1800,1000)
             if args.fullscreen:
                 cv2.setWindowProperty('AirBoard UI demo',cv2.WND_PROP_FULLSCREEN,cv2.WINDOW_FULLSCREEN)
             cv2.setMouseCallback('AirBoard UI demo',mouse_event)
@@ -227,6 +294,7 @@ def main() -> None:
         while True:
             now = time.monotonic()
             camera = np.full((480,640,3),35,np.uint8)
+            trace_result = None
             if tracker:
                 ok,frame = cap.read() if not input_failed else (False,None)
                 if not ok:
@@ -239,6 +307,7 @@ def main() -> None:
                     h,w = frame.shape[:2]
                     hands = tracker.detect(frame)
                     result = recognizer.update(hands,w,h,now)
+                    trace_result = result
                     state = from_gesture_result(result,(w,h))
                     camera = cv2.resize(frame,(640,480))
             elif args.virtual:
@@ -261,11 +330,30 @@ def main() -> None:
             selected = overlay.dwell(pos if not editing and calibration_points is None else None,now)
             if selected:
                 setattr(controller,*selected)
-            packet = controller.update(state,now,suppressed=editing or calibration_points is not None or overlay.target is not None)
+            packet = controller.update(state,now,
+                                       suppressed=editing or calibration_points is not None or overlay.target is not None,
+                                       navigation_suppressed=editing or calibration_points is not None or selected is not None)
             for command in packet.commands:
                 message = move_page(1 if command=='page_next' else -1)
             slide = renderer.consume(packet)
+            if trace_stream is not None:
+                record={'t':now, 'pose':trace_result.pose if trace_result else 'NONE',
+                        'hands':len(trace_result.hands) if trace_result else 0,
+                        'events':trace_result.events if trace_result else [],
+                        'metrics':trace_result.debug if trace_result else {},
+                        'tool':packet.tool,'active':packet.active,'phase':packet.phase,
+                        'raw_slide_position':packet.position,
+                        'filtered_slide_position':renderer.display_position if args.pdf else packet.position,
+                        'palette':overlay.target is not None,
+                        'outside':state.position is not None and pos is None,
+                        'blocked':controller.blocked,'navigation':controller.navigation_status}
+                trace_stream.write(json.dumps(record,ensure_ascii=False)+'\n')
+                if frame_number%30==0:
+                    trace_stream.flush()
             notice = controller.notification if now<controller.notice_until else ''
+            if args.pdf:
+                from dataclasses import replace
+                packet=replace(packet,position=renderer.display_position)
             overlay.draw(slide,packet,notice)
             contour = np.rint(controller.calibration.corners*np.float32([639,479])).astype(np.int32)
             cv2.polylines(camera,[contour],True,(0,180,180),2)
@@ -348,6 +436,8 @@ def main() -> None:
             if args.pdf:
                 renderer.close()
         finally:
+            if trace_stream is not None:
+                trace_stream.close()
             if tracker:
                 tracker.close()
             if cap is not None:

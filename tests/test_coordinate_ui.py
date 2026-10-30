@@ -48,9 +48,9 @@ class StateTests(unittest.TestCase):
         self.settings = Settings()
         self.c = UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),self.settings)
 
-    def frame(self, *gestures: str, position: tuple | None = (.5,.5), suppressed: bool = False) -> object:
+    def frame(self, *gestures: str, position: tuple | None = (.5,.5), suppressed: bool = False, now: float = 1.) -> object:
         """동일 시각 기준의 테스트 프레임."""
-        return self.c.update(InputState(position,frozenset(gestures)),1.,suppressed)
+        return self.c.update(InputState(position,frozenset(gestures)),now,suppressed)
 
     def test_strokes_and_tracking_loss(self) -> None:
         self.assertEqual(self.frame().phase,'hover')
@@ -79,7 +79,7 @@ class StateTests(unittest.TestCase):
         self.frame('PINCH')
         self.assertEqual(self.frame('PINCH','SWIPE_RIGHT').commands,())
         self.frame()
-        self.assertEqual(self.frame('SWIPE_RIGHT').commands,('page_next',))
+        self.assertEqual(self.frame('SWIPE_RIGHT',now=2.).commands,('page_next',))
         self.assertEqual(self.frame().commands,())
 
     def test_pointer_and_suppression(self) -> None:
@@ -143,7 +143,7 @@ class StateTests(unittest.TestCase):
         self.assertTrue(np.any(screen[540:] == 255))
 
     def test_team_result_adapter(self) -> None:
-        result = SimpleNamespace(pose='PINCH',pen_down=True,pen_point=(320,240),pointer_point=(400,200),events=['DOUBLE_CLAP'])
+        result = SimpleNamespace(hands=[object()],pose='PINCH',pen_down=True,pen_point=(320,240),pointer_point=(400,200),events=['DOUBLE_CLAP'])
         state = from_gesture_result(result,(641,481))
         self.assertEqual(state.position,(.5,.5))
         self.assertEqual(state.gestures,frozenset({'PINCH','DOUBLE_CLAP'}))

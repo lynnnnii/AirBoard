@@ -2,21 +2,34 @@
 
 핀치 제스처 기반 PDF 허공 필기 팀 프로젝트.
 
-## 좌표 변환 및 UI (임준서)
-
-설치, 웹캠·마우스·가상 손 실행, 4점 캘리브레이션, JSON 설정, 팀 모듈 연결은
-[COORDINATE_UI.md](COORDINATE_UI.md)를 참고하세요.
+## 좌표 변환·UI 및 PDF 통합 데모
 
 ```powershell
-.\.venv\Scripts\python.exe -m airboard.ui.demo
+.\.venv\Scripts\python.exe -m pip install -r requirements-ui.txt
+.\.venv\Scripts\python.exe -m airboard.ui.demo --pdf data/pdfs/ui-test/segmentation-p01-15.pdf
 ```
 
-`--pdf "PDF 경로"`를 추가하면 팀 렌더러로 실제 PDF를 표시하고 페이지별로 필기합니다.
-창은 기본 1600×900이며 `--fullscreen`으로 전체 화면 실행이 가능합니다.
-현재 `main.py`는 통합 전입니다. UI 데모에는 떨림 보정·PDF 저장 UI가 아직 연결되지 않았습니다.
+기본은 웹캠 입력입니다. `--mouse` 또는 `--virtual`로 카메라 없이 실행할 수 있습니다.
+PDF 없이 실행하면 흰 배경 독립 데모입니다. PDF 모드에는 팀 보정기와 렌더러가 연결되어 있습니다.
+기본 창은 1800×1000이며 `--fullscreen`으로 전체 화면 실행이 가능합니다.
 
-## PDF 작업 자동 저장
+- 핀치: 필기. 박수 두 번: 펜/형광펜. 필기를 끝낸 뒤 주먹: 지우개. 검지 포인터: 포인터.
+- 손가락을 펼쳐 좌우로 이동: 페이지 넘김. 방향키는 비상용 페이지 이동입니다.
+- C: 캘리브레이션. 일반 화면 R: 기본 영역 복원. S: 제스처 설정.
+- X: 현재 페이지 필기 지우기. Q: 종료.
+- PDF별 페이지와 필기는 로컬 자동 저장되어 재실행 시 복원됩니다. 원본 PDF는 수정하지 않습니다.
 
-PDF 모드에서는 마지막 페이지와 페이지별 펜·형광펜·지우개·전체 지우기 이력을 `data/sessions/`에 JSON으로 자동 저장합니다. 획 종료·페이지 이동·전체 지우기·종료 시 저장하며, 긴 획은 약 2초 간격으로 중간 저장합니다. 동일 내용의 PDF를 다시 열면 복원됩니다. PDF 내용이 바뀌면 별도 작업으로 취급하며 원본 PDF는 수정하지 않습니다. 저장 파일은 개인 데이터이므로 Git에서 제외합니다.
+## 문서
 
-흰 배경 데모는 자동 저장 대상이 아닙니다. 저장이 실패하면 오류로 안내하며, 손상된 상태 파일은 덮어쓰지 않고 시작을 중단합니다. 렌더링 크기를 변경한 경우 기존 저장 상태는 자동 적용하지 않습니다.
+- [좌표·UI 설치, 설정, 인터페이스](COORDINATE_UI.md)
+- [다른 담당 모듈의 변경 이유·호환성·리뷰 포인트](INTEGRATION_CHANGES.md)
+- [분할 PDF 테스트 자료와 확인 순서](data/pdfs/ui-test/README.md)
+
+현재 `main.py` 최종 통합과 필기 합성 PDF 내보내기 UI는 별도 작업입니다.
+실제 박수 인식률·필기 지연·FPS는 추가 평가가 필요합니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+전체 자동 테스트 88개 통과. 개인 필기·캘리브레이션·제스처 설정과 수치 로그는 Git에서 제외합니다.

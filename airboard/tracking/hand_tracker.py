@@ -17,7 +17,9 @@ DEFAULT_MODEL = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 class HandTracker:
     """프레임에서 손 랜드마크를 픽셀 좌표 (21,3) 배열 리스트로 뽑는다."""
 
-    def __init__(self, model_path=DEFAULT_MODEL):
+    def __init__(self, model_path=DEFAULT_MODEL, detection_confidence=0.5):
+        if not 0<detection_confidence<=1:
+            raise ValueError("detection_confidence must be in (0, 1]")
         from mediapipe.tasks.python import vision
         from mediapipe.tasks.python.core.base_options import BaseOptions
 
@@ -25,7 +27,7 @@ class HandTracker:
             base_options=BaseOptions(model_asset_buffer=Path(model_path).read_bytes()),
             running_mode=vision.RunningMode.VIDEO,
             num_hands=2,                       # 박수 인식을 위해 양손 추적
-            min_hand_detection_confidence=0.5,  # 낮을수록 박수 후 손을 빠르게 다시 찾음
+            min_hand_detection_confidence=detection_confidence,  # 낮을수록 박수 후 손을 빠르게 다시 찾음
             min_hand_presence_confidence=0.5,
             min_tracking_confidence=0.5,
         )

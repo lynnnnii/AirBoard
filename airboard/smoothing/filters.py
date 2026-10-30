@@ -71,22 +71,25 @@ class OneEuroFilter:
 
     def reset(self) -> None:
         self.x_prev: np.ndarray | None = None
+        self.raw_prev: np.ndarray | None = None
         self.dx_prev = np.zeros(2)
         self.t_prev = 0.0
 
     def __call__(self, point: Sequence[float], t: float) -> np.ndarray:
         x = np.asarray(point, dtype=float)
         if self.x_prev is None:
-            self.x_prev, self.t_prev = x, t
+            self.x_prev, self.t_prev = x.copy(), t
+            self.raw_prev = x.copy()
             return x.copy()
 
         dt = max(t - self.t_prev, 1e-6)
         a_d = _smoothing_factor(self.d_cutoff, dt)
-        dx_hat = a_d * (x - self.x_prev) / dt + (1 - a_d) * self.dx_prev
+        dx_hat = a_d * (x - self.raw_prev) / dt + (1 - a_d) * self.dx_prev
 
         cutoff = self.min_cutoff + self.beta * float(np.linalg.norm(dx_hat))
         a = _smoothing_factor(cutoff, dt)
         x_hat = a * x + (1 - a) * self.x_prev
 
+        self.raw_prev = x.copy()
         self.x_prev, self.dx_prev, self.t_prev = x_hat, dx_hat, t
         return x_hat.copy()
