@@ -3,7 +3,7 @@
 모델 파일: models/hand_landmarker.task
   https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
 """
-
+from pathlib import Path
 import os
 import time
 
@@ -22,10 +22,10 @@ class HandTracker:
         from mediapipe.tasks.python.core.base_options import BaseOptions
 
         opts = vision.HandLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path=model_path),
+            base_options=BaseOptions(model_asset_buffer=Path(model_path).read_bytes()),
             running_mode=vision.RunningMode.VIDEO,
             num_hands=2,                       # 박수 인식을 위해 양손 추적
-            min_hand_detection_confidence=0.5,  # 낮을수록 박수 후 손을 빨리 다시 찾음
+            min_hand_detection_confidence=0.5,  # 낮을수록 박수 후 손을 빠르게 다시 찾음
             min_hand_presence_confidence=0.5,
             min_tracking_confidence=0.5,
         )
