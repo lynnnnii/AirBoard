@@ -2,6 +2,7 @@
 import argparse
 import math
 import time
+from pathlib import Path
 import cv2
 import numpy as np
 from airboard.calibration import Calibration
@@ -38,9 +39,18 @@ class PreviewRenderer:
 
 class PDFRenderer:
     """UI 패킷을 팀 PDF 렌더러의 공개 API에 연결한다."""
-    def __init__(self, path: str, config: object) -> None:
+    def __init__(self, path: str, config: object, state_dir: Path | None = None) -> None:
         from airboard.render import AirBoardRenderer
         self.board = AirBoardRenderer(path, config)
+        self.state_path = None if state_dir is None else Path(state_dir)/(self.board.document_key+'.json')
+        self._dirty = False
+        self._last_save = time.monotonic()
+        if self.state_path is not None and self.state_path.exists():
+            try:
+                self.board.load_session(self.state_path)
+            except Exception:
+                self.board.close()
+                raise
 
     def consume(self, packet: object) -> np.ndarray:
         """도구와 획 종료를 반영하고 UI 없는 PDF 이미지를 반환한다."""
@@ -50,7 +60,38 @@ class PDFRenderer:
                           eraser_active=packet.active and packet.tool=='eraser',
                           color=packet.color,
                           width=30 if packet.tool=='eraser' else packet.width*4 if packet.tool=='highlighter' else packet.width)
+        if packet.active:
+            self._dirty = True
+        self.checkpoint(force=not packet.active)
         return self.board.render_page()
+
+    def checkpoint(self, force: bool = False) -> None:
+        """획 종료 또는 2초 간격으로 진행 상태를 저장한다."""
+        if self.state_path is not None and self._dirty and (force or time.monotonic()-self._last_save>=2):
+            self.board.save_session(self.state_path)
+            self._dirty = False
+            self._last_save = time.monotonic()
+
+    def change_page(self, offset: int) -> None:
+        """페이지 변경과 직전 필기를 저장한다."""
+        self.board.change_page(offset)
+        self._dirty = True
+        self.checkpoint(force=True)
+
+    def clear_page(self) -> None:
+        """지운 상태도 저장하여 재실행 시 지운 획이 나타나지 않게 한다."""
+        self.board.clear_page()
+        self._dirty = True
+        self.checkpoint(force=True)
+
+    def close(self) -> None:
+        """종료 직전 진행 중 필기와 페이지를 저장하고 자원을 닫는다."""
+        try:
+            self.board.end_stroke()
+            self._dirty = True
+            self.checkpoint(force=True)
+        finally:
+            self.board.close()
 
 
 def reset_calibration(controller: UIController, renderer: object,
@@ -126,7 +167,7 @@ def main() -> None:
         from dataclasses import replace
         from airboard.render import RenderConfig
         cfg = replace(RenderConfig.from_json(ROOT/'config/default.json'), max_width=1280, max_height=720)
-        renderer = PDFRenderer(args.pdf, cfg)
+        renderer = PDFRenderer(args.pdf, cfg, state_dir=ROOT/'data/sessions')
         calibration = Calibration(calibration.corners.tolist(), renderer.board.slide_size)
     controller = UIController(calibration,settings)
     overlay = Overlay(settings)
@@ -137,7 +178,7 @@ def main() -> None:
         nonlocal page
         previous_page = page
         if args.pdf:
-            renderer.board.change_page(offset)
+            renderer.change_page(offset)
             page = renderer.board.current_page+1
             controller.calibration = Calibration(controller.calibration.corners.tolist(),renderer.board.slide_size)
             controller.active = False
@@ -152,7 +193,7 @@ def main() -> None:
     mouse = {'position':None,'down':False}
     calibration_points = None
     editing,row = False,0
-    page = 1
+    page = renderer.board.current_page+1 if args.pdf else 1
     message = ''
 
     def mouse_event(kind: int, x: int, y: int, flags: int, param: object) -> None:
@@ -182,19 +223,24 @@ def main() -> None:
                 cv2.setWindowProperty('AirBoard UI demo',cv2.WND_PROP_FULLSCREEN,cv2.WINDOW_FULLSCREEN)
             cv2.setMouseCallback('AirBoard UI demo',mouse_event)
         frame_number = 0
+        input_failed = False
         while True:
             now = time.monotonic()
             camera = np.full((480,640,3),35,np.uint8)
             if tracker:
-                ok,frame = cap.read()
+                ok,frame = cap.read() if not input_failed else (False,None)
                 if not ok:
-                    break
-                frame = cv2.flip(frame,1)
-                h,w = frame.shape[:2]
-                hands = tracker.detect(frame)
-                result = recognizer.update(hands,w,h,now)
-                state = from_gesture_result(result,(w,h))
-                camera = cv2.resize(frame,(640,480))
+                    input_failed = True
+                    state = InputState(None)
+                    cv2.putText(camera,'Input stopped',(20,220),cv2.FONT_HERSHEY_SIMPLEX,
+                                1.,(255,255,255),2,cv2.LINE_AA)
+                else:
+                    frame = cv2.flip(frame,1)
+                    h,w = frame.shape[:2]
+                    hands = tracker.detect(frame)
+                    result = recognizer.update(hands,w,h,now)
+                    state = from_gesture_result(result,(w,h))
+                    camera = cv2.resize(frame,(640,480))
             elif args.virtual:
                 t = frame_number/30
                 state = InputState((.5+.28*math.cos(t),.5+.27*math.sin(t*1.8)),frozenset({'PINCH'} if t%4<3 else ()))
@@ -291,21 +337,23 @@ def main() -> None:
                 message = move_page(-1 if key==left else 1)
             elif key==ord('x'):
                 if args.pdf:
-                    renderer.board.clear_page()
+                    renderer.clear_page()
                 else:
                     renderer.ink[:] = 255
                     renderer.previous = None
                 controller.active = False
                 controller.blocked = True
     finally:
-        if args.pdf:
-            renderer.board.close()
-        if tracker:
-            tracker.close()
-        if cap is not None:
-            cap.release()
-        if not args.headless:
-            cv2.destroyAllWindows()
+        try:
+            if args.pdf:
+                renderer.close()
+        finally:
+            if tracker:
+                tracker.close()
+            if cap is not None:
+                cap.release()
+            if not args.headless:
+                cv2.destroyAllWindows()
 
 
 if __name__=='__main__':

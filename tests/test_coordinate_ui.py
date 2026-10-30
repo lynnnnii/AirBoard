@@ -170,6 +170,24 @@ class StateTests(unittest.TestCase):
 class SettingsTests(unittest.TestCase):
     """설정 JSON 검증과 사용자 설정 우선 로드."""
 
+    def test_empty_user_mapping_falls_back_and_cannot_be_saved(self) -> None:
+        """빈 개인 매핑은 기본값으로 복구하고 빈 매핑 저장은 거부한다."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root/'config').mkdir()
+            for name in ('default.json','gestures.json'):
+                (root/'config'/name).write_bytes((ROOT/'config'/name).read_bytes())
+            (root/'config/ui-user.json').write_text(json.dumps({'mapping':{},'ui':{}}),encoding='utf-8')
+            settings = Settings(root)
+            expected = json.loads((root/'config/gestures.json').read_text(encoding='utf-8'))
+            self.assertEqual(settings.mapping,expected)
+            settings.mapping = {}
+            with self.assertRaises(ValueError):
+                settings.save()
+            (root/'config/gestures.json').write_text('{}',encoding='utf-8')
+            with self.assertRaisesRegex(ValueError,'gestures.json'):
+                Settings(root)
+
     def test_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

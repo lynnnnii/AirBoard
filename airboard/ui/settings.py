@@ -21,16 +21,18 @@ class Settings:
         self.root = Path(root)
         self.ui = read_json(self.root/'config/default.json')['ui']
         self.mapping = read_json(self.root/'config/gestures.json')
+        if not self.mapping:
+            raise ValueError('기본 제스처 매핑이 비어 있습니다: config/gestures.json을 복원하세요.')
         self.user_path = self.root/'config/ui-user.json'
         if self.user_path.exists():
             user = read_json(self.user_path)
-            self.mapping = user['mapping']
+            self.mapping = self.mapping.copy() if user['mapping'] == {} else user['mapping']
             self.ui.update(user['ui'])
         self.validate()
 
     def validate(self) -> None:
         """실행 가능한 값만 허용한다."""
-        if not isinstance(self.mapping,dict) or any(not isinstance(k,str) or not k or v not in ACTIONS for k,v in self.mapping.items()):
+        if not isinstance(self.mapping,dict) or not self.mapping or any(not isinstance(k,str) or not k or v not in ACTIONS for k,v in self.mapping.items()):
             raise ValueError('잘못된 제스처 매핑')
         if not self.ui['colors'] or any(len(c)!=7 or c[0]!='#' for c in self.ui['colors']):
             raise ValueError('색상은 #RRGGBB 형식입니다.')

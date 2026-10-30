@@ -2,6 +2,8 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch, MagicMock
+from airboard.ui import demo
 import numpy as np
 import pymupdf
 from airboard.render import RenderConfig
@@ -41,3 +43,43 @@ class UIPDFTests(unittest.TestCase):
             finally:
                 board.close()
             self.assertEqual(path.read_bytes(),original)
+
+
+    def test_input_end_keeps_pdf_navigation_and_quit(self):
+        """영상 종료와 카메라 읽기 실패 뒤에도 창·페이지 이동·종료를 유지한다."""
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'sample.pdf'
+            with pymupdf.open() as doc:
+                doc.new_page(width=320,height=180)
+                doc.new_page(width=320,height=180)
+                doc.save(path)
+            for source in (['--video','missing.mp4'], []):
+                with self.subTest(source=source):
+                    cap=MagicMock()
+                    cap.isOpened.return_value=True
+                    cap.read.return_value=(False,None)
+                    captured=[]
+                    real_renderer=demo.PDFRenderer
+                    def make_renderer(*args,**kwargs):
+                        renderer=real_renderer(*args,state_dir=Path(folder)/('state-video' if source else 'state-camera'))
+                        renderer.board.close=MagicMock(wraps=renderer.board.close)
+                        captured.append(renderer)
+                        return renderer
+                    with patch('sys.argv',['demo','--pdf',str(path)]+source), \
+                         patch('cv2.VideoCapture',return_value=cap), \
+                         patch('airboard.input.camera.open_camera',return_value=cap), \
+                         patch('airboard.tracking.hand_tracker.HandTracker') as tracker, \
+                         patch('cv2.namedWindow'),patch('cv2.resizeWindow'), \
+                         patch('cv2.setMouseCallback'),patch('cv2.imshow') as show, \
+                         patch('cv2.getWindowProperty',return_value=1), \
+                         patch('cv2.destroyAllWindows'), \
+                         patch('cv2.waitKeyEx',side_effect=[2555904,ord('q')]) as wait, \
+                         patch.object(demo,'PDFRenderer',side_effect=make_renderer):
+                        demo.main()
+                        self.assertEqual(wait.call_count,2)
+                        self.assertEqual(show.call_count,2)
+                        self.assertEqual(captured[0].board.current_page,1)
+                        cap.read.assert_called_once()
+                        tracker.return_value.detect.assert_not_called()
+                        captured[0].board.close.assert_called_once()
+                        cap.release.assert_called_once()

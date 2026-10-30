@@ -23,3 +23,6 @@ data/pdfs/ui-test/*
 !data/pdfs/ui-test/segmentation-p01-15.pdf
 !data/pdfs/ui-test/segmentation-p16-30.pdf
 !data/pdfs/ui-test/segmentation-p31-44.pdf
+
+# PDF별 개인 필기 및 마지막 페이지
+data/sessions/

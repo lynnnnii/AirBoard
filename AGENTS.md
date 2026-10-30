@@ -149,3 +149,6 @@ python -m unittest discover tests                             # 단위 테스트
 
 
 다른 사람 담당 모듈의 인터페이스를 바꿔야 하면 PR 설명에 이유를 적고 해당 담당자를 리뷰어로 지정합니다.
+## PDF 작업 복원 API
+
+`AirBoardRenderer.document_key`는 PDF 내용 해시입니다. `save_session(path)`와 `load_session(path)`는 페이지·편집 이력을 JSON으로 저장·복원하는 공개 API입니다. 기존 입력 인터페이스는 유지하며 UI PDF 어댑터가 호출합니다. `data/sessions/`는 개인 상태로 Git 제외 대상입니다.
