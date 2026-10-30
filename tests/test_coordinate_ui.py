@@ -1,0 +1,144 @@
+"""카메라/창 없이 좌표·UI 상태 및 팀 인식 어댑터를 검증한다."""
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+import numpy as np
+from airboard.calibration import Calibration
+from airboard.ui.settings import Settings, ROOT
+from airboard.ui.controller import UIController, InputState, from_gesture_result
+from airboard.ui.overlay import Overlay
+from airboard.ui.demo import PreviewRenderer
+
+
+class CoordinateTests(unittest.TestCase):
+    """독립적인 기하 기준으로 호모그래피를 확인한다."""
+
+    def test_projective_corners_and_center(self) -> None:
+        c = Calibration([[0,0],[.5,0],[1,1],[0,1]],(201,151))
+        for p,wanted in zip(c.corners,[(0,0),(200,0),(200,150),(0,150)]):
+            np.testing.assert_allclose(c.transform(p),wanted,atol=1e-4)
+        np.testing.assert_allclose(c.transform((1/3,1/3)),(100,75),atol=1e-4)
+
+    def test_bad_geometry(self) -> None:
+        for points in ([[0,0]]*4,[[0,0],[1,1],[1,0],[0,1]],
+                       [[0,0],[1,0],[.2,.2],[0,1]],[[0,0],[1,0],[1,float('nan')],[0,1]]):
+            with self.subTest(points=points),self.assertRaises(ValueError):
+                Calibration(points)
+
+    def test_outside_and_loss(self) -> None:
+        c = Calibration([[.1,.1],[.9,.1],[.9,.9],[.1,.9]])
+        self.assertIsNone(c.transform((0,0)))
+        self.assertIsNone(c.transform(None))
+        self.assertIsNone(c.transform((float('inf'),.5)))
+
+    def test_persistence(self) -> None:
+        c = Calibration([[0,0],[1,0],[1,1],[0,1]])
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'cal.json'
+            c.save(path)
+            np.testing.assert_allclose(Calibration.load(path).matrix,c.matrix)
+
+
+class StateTests(unittest.TestCase):
+    """획 경계·도구 우선순위·일회성 이벤트 검증."""
+
+    def setUp(self) -> None:
+        self.settings = Settings()
+        self.c = UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),self.settings)
+
+    def frame(self, *gestures: str, position: tuple | None = (.5,.5), suppressed: bool = False) -> object:
+        """동일 시각 기준의 테스트 프레임."""
+        return self.c.update(InputState(position,frozenset(gestures)),1.,suppressed)
+
+    def test_strokes_and_tracking_loss(self) -> None:
+        self.assertEqual(self.frame().phase,'hover')
+        self.assertEqual(self.frame('PINCH').phase,'down')
+        self.assertEqual(self.frame('PINCH').phase,'move')
+        self.assertEqual(self.frame(position=None).phase,'up')
+        self.assertEqual(self.frame('PINCH').phase,'down')
+        self.assertEqual(self.frame('PINCH',position=(2,2)).phase,'up')
+        self.assertEqual(self.frame('PINCH').phase,'down')
+
+    def test_fist_priority_restore_and_repinch(self) -> None:
+        self.frame('PINCH')
+        for _ in range(self.settings.ui['tool_hold_frames']):
+            p = self.frame('FIST','PINCH')
+        self.assertEqual(p.tool,'eraser')
+        self.assertTrue(self.frame('FIST','PINCH').active)
+        self.assertFalse(self.frame('PINCH').active)
+        self.assertEqual(self.c.tool,'pen')
+        self.assertFalse(self.frame('PINCH').active)
+        self.frame()
+        self.assertTrue(self.frame('PINCH').active)
+
+    def test_event_no_hand_and_page_guard(self) -> None:
+        self.assertEqual(self.frame('DOUBLE_CLAP',position=None).tool,'highlighter')
+        self.assertEqual(self.frame().tool,'highlighter')
+        self.frame('PINCH')
+        self.assertEqual(self.frame('PINCH','SWIPE_RIGHT').commands,())
+        self.frame()
+        self.assertEqual(self.frame('SWIPE_RIGHT').commands,('page_next',))
+        self.assertEqual(self.frame().commands,())
+
+    def test_pointer_and_suppression(self) -> None:
+        for _ in range(self.settings.ui['tool_hold_frames']):
+            p = self.frame('POINTER','PINCH')
+        self.assertEqual(p.tool,'pointer')
+        self.assertFalse(p.active)
+        self.frame()
+        self.frame('PINCH')
+        self.assertEqual(self.frame('PINCH',suppressed=True).phase,'up')
+
+    def test_custom_mapping(self) -> None:
+        self.settings.mapping = {'WAVE':'toggle_highlighter','TOUCH':'draw'}
+        self.assertEqual(self.frame('DOUBLE_CLAP').tool,'pen')
+        self.assertEqual(self.frame('WAVE').tool,'highlighter')
+        self.assertTrue(self.frame('TOUCH').active)
+
+    def test_team_result_adapter(self) -> None:
+        result = SimpleNamespace(pose='PINCH',pen_down=True,pen_point=(320,240),pointer_point=(400,200),events=['DOUBLE_CLAP'])
+        state = from_gesture_result(result,(641,481))
+        self.assertEqual(state.position,(.5,.5))
+        self.assertEqual(state.gestures,frozenset({'PINCH','DOUBLE_CLAP'}))
+        result.pose = 'FIST'
+        self.assertEqual(from_gesture_result(result,(641,481)).position,(.625,200/480))
+
+    def test_palette_dwell_single_fire_and_reset(self) -> None:
+        overlay = Overlay(self.settings)
+        self.assertIsNone(overlay.dwell((20,20),0))
+        self.assertEqual(overlay.dwell((20,20),1),('color',self.settings.ui['colors'][0]))
+        self.assertIsNone(overlay.dwell((20,20),2))
+        overlay.dwell(None,3)
+        self.assertIsNone(overlay.dwell((20,20),4))
+        self.assertIsNotNone(overlay.dwell((20,20),5))
+
+    def test_render_and_overlay(self) -> None:
+        renderer,overlay = PreviewRenderer((960,540)),Overlay(self.settings)
+        image = renderer.consume(self.frame('PINCH'))
+        self.assertTrue(np.any(image!=255))
+        overlay.draw(image,self.frame('PINCH'),'pen')
+        self.assertEqual(image.shape,(540,960,3))
+
+
+class SettingsTests(unittest.TestCase):
+    """설정 JSON 검증과 사용자 설정 우선 로드."""
+
+    def test_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root/'config').mkdir()
+            for name in ('default.json','gestures.json'):
+                (root/'config'/name).write_text((ROOT/'config'/name).read_text(encoding='utf-8'),encoding='utf-8')
+            s = Settings(root)
+            s.mapping['DOUBLE_CLAP'] = 'none'
+            s.save()
+            self.assertEqual(Settings(root).mapping['DOUBLE_CLAP'],'none')
+            s.mapping['FIST'] = 'INVALID'
+            with self.assertRaises(ValueError):
+                s.save()
+
+
+if __name__=='__main__':
+    unittest.main()

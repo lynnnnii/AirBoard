@@ -10,3 +10,6 @@ venv/
 
 outputs/
 *.py[cod]
+config/ui-user.json
+config/ui-user.tmp
+config/calibration-user.json

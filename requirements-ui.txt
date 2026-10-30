@@ -1,0 +1,4 @@
+# MediaPipe 0.10.21의 NumPy<2 환경에 맞춘 UI/웹캠 데모 의존성
+numpy==1.26.4
+opencv-contrib-python==4.11.0.86
+mediapipe==0.10.21

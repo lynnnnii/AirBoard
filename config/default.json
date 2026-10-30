@@ -18,5 +18,44 @@
     "highlighter_width": 24.0,
     "highlighter_opacity": 0.3,
     "eraser_width": 40.0
+  },
+  "ui": {
+    "slide_size": [
+      960,
+      540
+    ],
+    "default_corners": [
+      [
+        0.1,
+        0.1
+      ],
+      [
+        0.9,
+        0.1
+      ],
+      [
+        0.9,
+        0.9
+      ],
+      [
+        0.1,
+        0.9
+      ]
+    ],
+    "colors": [
+      "#2563eb",
+      "#dc2626",
+      "#16a34a",
+      "#111827"
+    ],
+    "widths": [
+      2,
+      4,
+      8
+    ],
+    "dwell_seconds": 0.65,
+    "notification_seconds": 1.2,
+    "tool_hold_frames": 2,
+    "highlighter_opacity": 0.3
   }
 }
