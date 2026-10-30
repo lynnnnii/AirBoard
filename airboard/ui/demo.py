@@ -36,6 +36,40 @@ class PreviewRenderer:
         return self.ink.copy()
 
 
+def compose_screen(camera: np.ndarray, slide: np.ndarray, page: int,
+                   tool: str, message: str = '') -> np.ndarray:
+    """필기 영역 아래에 불투명 상태줄에 페이지와 도구 상태를 표시한다."""
+    height = max(camera.shape[0], slide.shape[0])
+    width = camera.shape[1] + slide.shape[1]
+    screen = np.full((height + 78, width, 3), 235, np.uint8)
+    screen[:camera.shape[0], :camera.shape[1]] = camera
+    screen[:slide.shape[0], camera.shape[1]:] = slide
+    screen[height:] = (32, 32, 32)
+    lines = [f'PREVIEW PAGE {page} (no PDF) | TOOL: {tool.upper()} | {message}',
+             'S Settings  C Set writing area  X Clear  Q Quit']
+    for i, line in enumerate(lines):
+        cv2.putText(screen, line, (16, height + 28 + i * 34),
+                    cv2.FONT_HERSHEY_SIMPLEX, .65, (255, 255, 255), 2, cv2.LINE_AA)
+    return screen
+
+
+def draw_settings(slide: np.ndarray, mapping: dict, row: int) -> None:
+    """설정 안내를 큰 글씨와 불투명 배경으로 분리해 축소 화면에서도 읽게 한다."""
+    slide[:] = 245
+    cv2.rectangle(slide, (0, 0), (slide.shape[1]-1, 153), (32,32,32), -1)
+    lines = ['GESTURE SETTINGS', 'UP / DOWN: select gesture',
+             'LEFT / RIGHT: change action', 'ENTER: save   ESC: cancel   R: defaults']
+    for i, text in enumerate(lines):
+        cv2.putText(slide, text, (20, 32+i*34), cv2.FONT_HERSHEY_SIMPLEX,
+                    .8, (255,255,255), 2, cv2.LINE_AA)
+    for i, (gesture, action) in enumerate(mapping.items()):
+        y = 188+i*50
+        if i == row:
+            cv2.rectangle(slide, (10,y-27), (slide.shape[1]-11,y+12), (220,232,250), -1)
+        cv2.putText(slide, f'{gesture} -> {action}', (20,y), cv2.FONT_HERSHEY_SIMPLEX,
+                    .75, (20,20,160) if i==row else (30,30,30), 2, cv2.LINE_AA)
+
+
 def main() -> None:
     """웹캠 기본; --mouse/--virtual/--video 및 화면 없는 회귀 실행 지원."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -59,8 +93,6 @@ def main() -> None:
     mouse = {'position':None,'down':False}
     calibration_points = None
     editing,row = False,0
-    simulated = set()
-    event = set()
     page = 1
     message = ''
 
@@ -86,7 +118,7 @@ def main() -> None:
             tracker,recognizer = HandTracker(),GestureRecognizer()
         if not args.headless:
             cv2.namedWindow('AirBoard UI demo',cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('AirBoard UI demo',1200,405)
+            cv2.resizeWindow('AirBoard UI demo',1200,464)
             cv2.setMouseCallback('AirBoard UI demo',mouse_event)
         frame_number = 0
         while True:
@@ -106,9 +138,8 @@ def main() -> None:
                 t = frame_number/30
                 state = InputState((.5+.28*math.cos(t),.5+.27*math.sin(t*1.8)),frozenset({'PINCH'} if t%4<3 else ()))
             else:
-                gestures = simulated | ({'PINCH'} if mouse['down'] else set()) | event
+                gestures = {'PINCH'} if mouse['down'] else set()
                 state = InputState(mouse['position'],frozenset(gestures))
-            event.clear()
             if calibration_points is not None and len(calibration_points)>=4:
                 try:
                     candidate = Calibration(calibration_points[:4],controller.calibration.size)
@@ -125,11 +156,14 @@ def main() -> None:
                 setattr(controller,*selected)
             packet = controller.update(state,now,suppressed=editing or calibration_points is not None or overlay.target is not None)
             for command in packet.commands:
+                previous_page = page
                 page = max(1,page+(1 if command=='page_next' else -1))
+                message = ('NEXT' if command=='page_next' else 'PREVIOUS') + f': {previous_page} -> {page}'
+                if page == previous_page:
+                    message = 'Already at first page'
             slide = renderer.consume(packet)
             notice = controller.notification if now<controller.notice_until else ''
             overlay.draw(slide,packet,notice)
-            cv2.putText(slide,f'Preview page {page} (no PDF) | {message}',(12,slide.shape[0]-20),cv2.FONT_HERSHEY_SIMPLEX,.5,(50,50,50),1)
             contour = np.rint(controller.calibration.corners*np.float32([639,479])).astype(np.int32)
             cv2.polylines(camera,[contour],True,(0,180,180),2)
             for i,p in enumerate(controller.calibration.corners):
@@ -142,20 +176,14 @@ def main() -> None:
                 for i,p in enumerate(calibration_points):
                     cv2.putText(camera,str(i+1),(round(p[0]*639),round(p[1]*479)),cv2.FONT_HERSHEY_SIMPLEX,.8,(0,255,255),2)
             if editing:
-                slide[:] = 245
-                cv2.putText(slide,'SETTINGS: UP/DOWN row, LEFT/RIGHT action, ENTER save, ESC cancel',(10,30),cv2.FONT_HERSHEY_SIMPLEX,.5,(0,0,0),1)
-                for i,(gesture,action) in enumerate(settings.mapping.items()):
-                    cv2.putText(slide,f'{gesture} -> {action}',(20,75+i*40),cv2.FONT_HERSHEY_SIMPLEX,.6,(0,0,220) if i==row else (40,40,40),2)
+                draw_settings(slide, settings.mapping, row)
             frame_number += 1
             if args.frames and frame_number>=args.frames:
                 print(f'Processed {frame_number} frames; last phase={packet.phase}')
                 break
             if args.headless:
                 continue
-            height = max(480,slide.shape[0])
-            screen = np.full((height,640+slide.shape[1],3),235,np.uint8)
-            screen[:480,:640] = camera
-            screen[:slide.shape[0],640:] = slide
+            screen = compose_screen(camera, slide, page, packet.tool, message)
             cv2.imshow('AirBoard UI demo',screen)
             key = cv2.waitKeyEx(16)
             if key==ord('q') or cv2.getWindowProperty('AirBoard UI demo',cv2.WND_PROP_VISIBLE)<1:
@@ -168,10 +196,16 @@ def main() -> None:
                 elif key in (left,right):
                     name = names[row]
                     settings.mapping[name] = ACTIONS[(ACTIONS.index(settings.mapping[name])+(-1 if key==left else 1))%len(ACTIONS)]
+                elif key==ord('r'):
+                    from .settings import read_json
+                    settings.mapping = read_json(ROOT/'config/gestures.json')
+                    row = 0
+                    message = 'Default mapping restored; ENTER to save'
                 elif key in (10,13):
                     try:
                         settings.save()
                         editing = False
+                        message = 'Gesture mapping saved; tools controlled by gestures'
                     except (ValueError,OSError) as exc:
                         message = str(exc)
                 elif key==27:
@@ -188,12 +222,11 @@ def main() -> None:
                 backup = settings.mapping.copy()
                 editing,row = True,0
             elif key in (left,right):
+                previous_page = page
                 page = max(1,page+(-1 if key==left else 1))
-            elif args.mouse and key==ord('h'):
-                event.add('DOUBLE_CLAP')
-            elif args.mouse and key in (ord('f'),ord('p')):
-                gesture = 'FIST' if key==ord('f') else 'POINTER'
-                simulated.symmetric_difference_update({gesture})
+                message = ('PREVIOUS' if key==left else 'NEXT') + f': {previous_page} -> {page}'
+                if page == previous_page:
+                    message = 'Already at first page'
             elif key==ord('x'):
                 renderer.ink[:] = 255
     finally:

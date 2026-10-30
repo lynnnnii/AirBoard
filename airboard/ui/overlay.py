@@ -34,9 +34,14 @@ class Overlay:
     def draw(self, image: object, packet: RenderPacket, notice: str = '') -> None:
         """전달받은 이미지를 수정; 창 생성/입력 처리는 호출자가 담당."""
         for a,b,c,d,k,v in self.cells:
-            cv2.rectangle(image,(a,b),(c,d),bgr(v) if k=='color' else (70,70,70),-1)
+            cv2.rectangle(image,(a,b),(c,d),bgr(v) if k=='color' else (35,35,35),-1)
             if k=='width':
-                cv2.putText(image,str(v),(a+12,b+26),cv2.FONT_HERSHEY_SIMPLEX,.6,(255,255,255),1)
+                text = str(v)
+                (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, .95, 2)
+                cv2.putText(image,text,(a+(c-a-tw)//2,b+(d-b+th)//2),
+                            cv2.FONT_HERSHEY_SIMPLEX,.95,(255,255,255),2,cv2.LINE_AA)
+                if v == packet.width:
+                    cv2.rectangle(image,(a,b),(c,d),(255,255,255),2)
             if (k,v)==self.target:
                 cv2.rectangle(image,(a,b),(c,d),(0,220,255),2)
         if packet.position:

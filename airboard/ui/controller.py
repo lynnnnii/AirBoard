@@ -50,13 +50,7 @@ class UIController:
         self.temporary = None
         self.candidate,self.count = None,0
         self.notification,self.notice_until = '',0.
-
-    def select_tool(self, tool: str, now: float) -> None:
-        """팔레트/키보드 수동 선택; 기존 획은 다음 update에서 종료된다."""
-        if tool not in ('pen','highlighter','eraser','pointer'):
-            raise ValueError('잘못된 도구')
-        self.base_tool = tool
-        self.notification,self.notice_until = tool,now+self.settings.ui['notification_seconds']
+        self._toggle_held = False
 
     def update(self, state: InputState, now: float, suppressed: bool = False) -> RenderPacket:
         """매 프레임 호출. 팔레트·설정·캘리브레이션 중에는 suppressed=True."""
@@ -76,8 +70,10 @@ class UIController:
         if 'draw' not in actions:
             self.blocked = False
         # 일회성 이벤트는 입력 계약에 따라 발생 프레임에만 실행한다.
-        if 'toggle_highlighter' in actions and not wanted and not self.active:
+        toggle = 'toggle_highlighter' in actions
+        if toggle and not self._toggle_held and not wanted and not self.active:
             self.base_tool = 'pen' if self.base_tool=='highlighter' else 'highlighter'
+        self._toggle_held = toggle
         self.tool = self.temporary or self.base_tool
         if self.tool != previous_tool:
             self.notification,self.notice_until = self.tool,now+self.settings.ui['notification_seconds']

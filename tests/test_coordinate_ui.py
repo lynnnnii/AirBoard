@@ -9,7 +9,7 @@ from airboard.calibration import Calibration
 from airboard.ui.settings import Settings, ROOT
 from airboard.ui.controller import UIController, InputState, from_gesture_result
 from airboard.ui.overlay import Overlay
-from airboard.ui.demo import PreviewRenderer
+from airboard.ui.demo import PreviewRenderer, compose_screen, draw_settings
 
 
 class CoordinateTests(unittest.TestCase):
@@ -96,6 +96,34 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.frame('DOUBLE_CLAP').tool,'pen')
         self.assertEqual(self.frame('WAVE').tool,'highlighter')
         self.assertTrue(self.frame('TOUCH').active)
+
+    def test_held_toggle_requires_new_gesture(self) -> None:
+        """형광펜 토글은 유지 중 한 번만 적용되고 새 동작으로 펜에 복귀한다."""
+        self.settings.mapping['POINTER'] = 'toggle_highlighter'
+        self.assertEqual(self.frame('POINTER').tool, 'highlighter')
+        self.assertEqual(self.frame('POINTER').tool, 'highlighter')
+        self.frame()
+        self.assertEqual(self.frame('POINTER').tool, 'pen')
+
+    def test_settings_panel_preserves_mapping(self) -> None:
+        """설정 화면은 매핑을 바꾸지 않고 별도 배경에 안내를 표시한다."""
+        image = np.zeros((540,960,3),np.uint8)
+        before = self.settings.mapping.copy()
+        draw_settings(image,self.settings.mapping,0)
+        self.assertEqual(self.settings.mapping,before)
+        np.testing.assert_array_equal(image[0,0],[32,32,32])
+        self.assertTrue(np.any(image[:150] == 255))
+
+    def test_footer_is_outside_ink(self) -> None:
+        """필기와 카메라를 보존하고 별도의 불투명 상태줄을 덧붙인다."""
+        camera = np.full((480,640,3), 80, np.uint8)
+        slide = np.full((540,960,3), 255, np.uint8)
+        screen = compose_screen(camera, slide, 2, 'pen', 'NEXT: 1 -> 2')
+        self.assertEqual(screen.shape, (618,1600,3))
+        np.testing.assert_array_equal(screen[:480,:640], camera)
+        np.testing.assert_array_equal(screen[:540,640:], slide)
+        np.testing.assert_array_equal(screen[540,0], [32,32,32])
+        self.assertTrue(np.any(screen[540:] == 255))
 
     def test_team_result_adapter(self) -> None:
         result = SimpleNamespace(pose='PINCH',pen_down=True,pen_point=(320,240),pointer_point=(400,200),events=['DOUBLE_CLAP'])
