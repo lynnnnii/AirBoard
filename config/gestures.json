@@ -1,5 +1,8 @@
 {
+  "PINCH": "draw",
   "DOUBLE_CLAP": "toggle_highlighter",
-  "SWIPE_RIGHT": "page_next",
-  "SWIPE_LEFT": "page_prev"
+  "FIST": "eraser",
+  "POINTER": "pointer",
+  "SWIPE_LEFT": "page_prev",
+  "SWIPE_RIGHT": "page_next"
 }

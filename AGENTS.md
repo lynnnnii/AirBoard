@@ -149,3 +149,10 @@ python -m unittest discover tests                             # 단위 테스트
 
 
 다른 사람 담당 모듈의 인터페이스를 바꿔야 하면 PR 설명에 이유를 적고 해당 담당자를 리뷰어로 지정합니다.
+## PDF 작업 복원 API
+
+`AirBoardRenderer.document_key`는 PDF 내용 해시입니다. `save_session(path)`와 `load_session(path)`는 페이지·편집 이력을 JSON으로 저장·복원하는 공개 API입니다. 기존 입력 인터페이스는 유지하며 UI PDF 어댑터가 호출합니다. `data/sessions/`는 개인 상태로 Git 제외 대상입니다.
+
+## 좌표·UI 브랜치의 공통 모듈 변경
+
+손 검출 선택 인자, 제스처 생성자의 config, 핀치 재시작/주먹 우선순위/박수 및 스와이프 동작, One Euro 수치 출력이 변경되었습니다. 기존 호출 형식은 유지하지만 행동·평가 결과가 완전히 같지는 않습니다. `INTEGRATION_CHANGES.md`의 담당별 설명과 리뷰 지점을 확인하세요. UI `InputState`에는 기본 True인 `navigation_allowed`가 추가되었으며, 실제 GestureResult 어댑터가 한 손/도구 상태에 맞춰 설정합니다.

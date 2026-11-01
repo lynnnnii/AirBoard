@@ -6,10 +6,11 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Literal
 import json
+import hashlib
 import math
 import os
 import tempfile
@@ -424,6 +425,81 @@ class AirBoardRenderer:
         finally:
             output.close()
         return path
+
+    @property
+    def document_key(self) -> str:
+        """PDF 내용으로 구분하므로 같은 이름의 다른 PDF와 상태가 섞이지 않는다."""
+        if not hasattr(self, '_document_key'):
+            digest = hashlib.sha256()
+            with self.pdf_path.open('rb') as stream:
+                for chunk in iter(lambda: stream.read(1024*1024), b''):
+                    digest.update(chunk)
+            self._document_key = digest.hexdigest()
+        return self._document_key
+
+    def save_session(self, path: str | Path) -> None:
+        """현재 페이지와 편집 이력을 원자적으로 저장한다. 진행 획도 보존한다."""
+        history = [[asdict(op) for op in page] for page in self._history]
+        if self._active is not None and self._active.stroke.points:
+            active = self._active
+            history[active.stroke.page].append(asdict(_Operation(active.stroke, active.opacity)))
+        data = {'version':1, 'document':self.document_key,
+                'render_size':[self.config.max_width,self.config.max_height],
+                'current_page':self.current_page, 'history':history}
+        self._atomic_write(Path(path),json.dumps(data,allow_nan=False).encode('utf-8'))
+
+    def load_session(self, path: str | Path) -> None:
+        """검증된 JSON만 복원한다. 실패하면 현재 필기 상태를 변경하지 않는다."""
+        try:
+            data=json.loads(Path(path).read_text(encoding='utf-8'))
+            if (data['version']!=1 or data['document']!=self.document_key
+                    or data['render_size']!=[self.config.max_width,self.config.max_height]):
+                raise ValueError('PDF 또는 렌더링 크기가 저장 상태와 다릅니다.')
+            page=data['current_page']
+            if type(page) is not int or not 0<=page<self.page_count:
+                raise ValueError('잘못된 페이지 번호')
+            raw=data['history']
+            if not isinstance(raw,list) or len(raw)!=self.page_count:
+                raise ValueError('잘못된 페이지 이력')
+            history=[]
+            next_id=0
+            for index,operations in enumerate(raw):
+                if not isinstance(operations,list):
+                    raise ValueError('잘못된 작업 목록')
+                restored=[]
+                if not operations:
+                    history.append(restored)
+                    continue
+                w,h=self._canvas(index).background.shape[1::-1]
+                for item in operations:
+                    if item.get('clear') is True:
+                        restored.append(_Operation(clear=True))
+                        continue
+                    stroke=Stroke(**item['stroke'])
+                    opacity=item['opacity']
+                    if (stroke.page!=index or stroke.tool not in ('pen','highlighter','eraser')
+                            or type(stroke.stroke_id) is not int or stroke.stroke_id<1
+                            or not math.isfinite(stroke.width) or not 0<stroke.width<=10000
+                            or not math.isfinite(opacity) or not 0<opacity<=1):
+                        raise ValueError('잘못된 획 속성')
+                    color_bgr(stroke.color)
+                    points=[]
+                    for x,y in stroke.points:
+                        if not(math.isfinite(x) and math.isfinite(y) and 0<=x<w and 0<=y<h):
+                            raise ValueError('잘못된 획 좌표')
+                        points.append((float(x),float(y)))
+                    stroke.points=points
+                    next_id=max(next_id,stroke.stroke_id)
+                    restored.append(_Operation(stroke,opacity))
+                history.append(restored)
+        except (KeyError,TypeError,ValueError,OverflowError) as exc:
+            raise ValueError(f'필기 저장 파일을 복원할 수 없습니다: {path}') from exc
+        self._active=None
+        self._history=history
+        self._next_id=next_id
+        self._cache.clear()
+        self.current_page=page
+        self._canvas(page)
 
     def close(self) -> None:
         """PDF와 캐시를 해제한다. 파일은 저장하지 않으므로 종료 전 별도 저장한다."""
