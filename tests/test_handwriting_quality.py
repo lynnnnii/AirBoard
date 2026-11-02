@@ -23,8 +23,8 @@ class HandwritingQualityTests(unittest.TestCase):
         self.assertLess(result_rms,raw_rms*.65)
         self.assertLess(np.mean(raw[20:,0]-filtered[20:,0]),15)
 
-    def test_pending_release_freezes_endpoint_without_breaking_contact(self):
-        """해제 확인 중 이동은 획에 넣지 않고 오판이면 이어 쓴다."""
+    def test_small_pinch_release_stops_without_drawing_tail(self):
+        """손가락을 조금 떼는 첫 프레임에 펜을 들고 다음 핀치는 새 획이다."""
         r=GestureRecognizer(self.config()['gestures'])
         hand=np.zeros((21,3),np.float32)
         hand[:,0]=100;hand[:,1]=50;hand[0,1]=80
@@ -32,17 +32,12 @@ class HandwritingQualityTests(unittest.TestCase):
             h=hand.copy();h[:,0]=x
             with patch('airboard.gestures.gesture.classify_pose',return_value='NONE'),patch('airboard.gestures.gesture.pinch_ratio',return_value=ratio):
                 return r.update([h],640,480,t)
-        for i in range(3): result=frame(100,.1,i*.05)
-        start=result.pen_point
-        pending=frame(200,.45,.2)
-        self.assertTrue(pending.pen_down)
-        self.assertEqual(pending.pen_point,start)
-        resumed=frame(120,.1,.25)
-        self.assertTrue(resumed.pen_down)
-        self.assertNotEqual(resumed.pen_point,start)
-        pending=frame(250,.45,.3)
-        self.assertEqual(pending.pen_point,resumed.pen_point)
-        self.assertFalse(frame(300,.45,.35).pen_down)
+        for i in range(self.config()['gestures']['pinch_on_frames']):
+            result=frame(100,.1,i*.05)
+        self.assertTrue(result.pen_down)
+        self.assertFalse(frame(200,.31,.2).pen_down)
+        self.assertFalse(frame(120,.1,.25).pen_down)
+        self.assertTrue(frame(130,.1,.3).pen_down)
 
     def test_clear_release_ends_stroke_on_first_frame(self):
         """확실하게 벌린 손은 두 프레임 대기 없이 획을 끝낸다."""
