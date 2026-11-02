@@ -73,7 +73,7 @@ class UIController:
             if self.temporary:
                 self.blocked = True
             self.temporary = None
-        elif self.count >= self.settings.ui['tool_hold_frames']:
+        elif self.count >= (self.settings.ui.get('eraser_hold_frames', 1) if wanted == 'eraser' else self.settings.ui['tool_hold_frames']):
             self.temporary = wanted
         if 'draw' not in actions:
             self.blocked = False
@@ -117,5 +117,7 @@ class UIController:
             self.navigation_status = ('page moved' if commands else 'waiting' if self._pending_page
                                       else 'cooldown' if now<self._page_blocked_until else 'ready')
         self.active = bool(active)
-        return RenderPacket(pos,self.tool,bool(active),phase,self.color,self.width,
+        color = self.settings.ui.get('highlighter_color', '#FFFF00') if self.tool == 'highlighter' else self.color
+        width = self.settings.ui.get('highlighter_width', 24) if self.tool == 'highlighter' else self.width
+        return RenderPacket(pos,self.tool,bool(active),phase,color,width,
                             self.settings.ui['highlighter_opacity'] if self.tool=='highlighter' else 1.,commands)
