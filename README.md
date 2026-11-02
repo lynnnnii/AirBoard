@@ -19,6 +19,24 @@ PDF 없이 실행하면 흰 배경 독립 데모입니다. PDF 모드에는 팀 
 - X: 현재 페이지 필기 지우기. Q: 종료.
 - PDF별 페이지와 필기는 로컬 자동 저장되어 재실행 시 복원됩니다. 원본 PDF는 수정하지 않습니다.
 
+## macOS에서 실행
+
+Python 3.10~3.12가 필요합니다. `mediapipe==0.10.21`이 3.13 이상을 지원하지 않으므로
+Homebrew 기본 `python3`가 3.13 이상이면 버전을 지정해 가상 환경을 만드세요. Apple Silicon에서 확인했습니다.
+
+```bash
+python3.12 -m venv .venv    # 3.10~3.12 중 설치된 버전
+.venv/bin/python -m pip install -r requirements-ui.txt
+.venv/bin/python -m airboard.ui.demo --pdf data/pdfs/ui-test/segmentation-p01-15.pdf
+```
+
+- 위 Windows 명령의 `.\.venv\Scripts\python.exe`는 맥에서 `.venv/bin/python`입니다. 옵션은 동일합니다.
+- 카메라 권한: 처음 실행하면 터미널(또는 IDE)의 카메라 접근 허용을 묻습니다.
+  거부했다면 시스템 설정 → 개인정보 보호 및 보안 → 카메라에서 켭니다.
+- 아이폰 연속성 카메라 등으로 카메라 번호가 밀리면 `--camera-index 1`을 지정합니다.
+- 카메라 없이 확인: `--mouse`, `--virtual`, `--video 파일.mp4`.
+- 현재 진입점은 `airboard.ui.demo`입니다. `main.py`는 아직 구현되지 않았습니다.
+
 ## 문서
 
 - [좌표·UI 설치, 설정, 인터페이스](COORDINATE_UI.md)
