@@ -1,4 +1,6 @@
 """카메라/창 없이 좌표·UI 상태 및 팀 인식 어댑터를 검증한다."""
+import os
+os.environ.setdefault('AIRBOARD_USER_SETTINGS', os.path.join(os.path.dirname(__file__), '_no_user_settings.json'))  # 개인 설정 없이 팀 기본값으로 검사
 import json
 from pathlib import Path
 import tempfile

@@ -7,7 +7,7 @@ AirBoard - 제스처 판정 모듈 (담당: Kim Hyunbo)
 다른 팀원은 GestureRecognizer.update(hands, frame_w, frame_h, t) 결과만 받아서 쓰면 된다.
   - result.pen_point   : 필기 좌표 (카메라 픽셀 좌표) -> 좌표 변환 담당에게 전달
   - result.pen_down    : True면 쓰는 중, False면 펜 든 상태
-  - result.pose        : 현재 손 모양 ("PINCH", "FIST", "POINTER", "OPEN", "NONE")
+  - result.pose        : 현재 손 모양 ("PINCH", "FIST", "POINTER", "TWO_FINGERS", "OPEN", "NONE")
   - result.events      : 이번 프레임에 발생한 1회성 이벤트 ("DOUBLE_CLAP", "SWIPE_LEFT", "SWIPE_RIGHT")
 """
 
@@ -312,7 +312,7 @@ class SwipeDetector:
 class GestureResult:
     hands: list = field(default_factory=list)   # 각 손의 (21,3) 픽셀 좌표 배열
     main_hand: np.ndarray = None                 # 필기에 쓰는 손 (가장 크게 보이는 손)
-    pose: str = "NONE"                           # PINCH / FIST / POINTER / OPEN / NONE
+    pose: str = "NONE"                           # PINCH / FIST / POINTER / TWO_FINGERS / OPEN / NONE
     pen_down: bool = False                       # True = 쓰는 중 (화면에는 WRITE ON으로 표시)
     pen_point: tuple = None                      # 필기 좌표 (엄지끝과 검지끝의 중간점)
     pointer_point: tuple = None                  # 검지 끝 좌표 (포인터·지우개 위치)
@@ -332,6 +332,7 @@ class GestureRecognizer:
         self.swipe = SwipeDetector(config)
         self.fist_count = 0
         self._last_ink_point = None
+        self._prev_pose = 'NONE'     # 직전 프레임 자세 (검지 자세 유지 판정용)
 
     def update(self, hands, frame_w, frame_h, t):
         """hands: HandTracker.detect() 결과 (손마다 (21,3) 픽셀 좌표). t: 초 단위 시각."""
@@ -349,6 +350,7 @@ class GestureRecognizer:
 
         if not hands:
             self.pinch.update(None)
+            self._prev_pose = 'NONE'
             self._last_ink_point = None
             self.fist_count = 0
             self.swipe.update(None, False, frame_w, frame_h, t)
@@ -362,6 +364,24 @@ class GestureRecognizer:
         tips = tip_to_palm(lm)
         pose = classify_pose(lm, curls, tips)
         ratio = pinch_ratio(lm)
+        # 아래 두 판정은 검지로 쓰는 설정(index_writing, UI가 매핑을 보고 켠다)에서만 쓴다.
+        # 핀치로 쓰는 설정에서는 원래 판정과 똑같이 동작해야 하기 때문이다.
+        index_mode = self.config.get('index_writing', False)
+        # 검지·중지 두 손가락 펴기(✌️): 검지로 쓰다가 펜을 드는 '멈춤' 제스처. 약지·새끼는 접혀 있어야 한다.
+        # 엄지 위치와 두 손가락 사이 간격은 보지 않는다.
+        two = self.config.get('two_finger_curl', CFG['curl_extended'])
+        if (index_mode and pose == 'NONE' and curls['index'] > two and curls['middle'] > two
+                and all(tips[k] < self.config.get('two_finger_fold', CFG['fold_tip']) for k in ('ring', 'pinky'))):
+            pose = 'TWO_FINGERS'
+        # 검지 자세가 이어지는 중에는 기준을 느슨하게 유지한다(히스테리시스). 글씨를 쓸 때는 검지가 살짝 굽고
+        # 엄지가 검지 쪽에 붙기 쉬워서, 처음 판정 기준(검지 펴짐 1.55, 엄지 간격 0.38)을 계속 요구하면 자꾸 끊긴다.
+        kept_pointer = (index_mode and pose == 'NONE' and self._prev_pose == 'POINTER'
+                        and curls['index'] > self.config.get('pointer_keep_curl', CFG['curl_extended'])
+                        and all(tips[k] < self.config.get('pointer_keep_fold', CFG['fold_tip'])
+                                for k in ('middle', 'ring', 'pinky'))
+                        and ratio > self.config.get('pointer_keep_pinch', CFG['pinch_off']))
+        if kept_pointer:
+            pose = 'POINTER'
 
         # 쓰는 중 닫힌 핀치는 유지한다. 지우개 전환은 pen-up 후에만 허용한다.
         if (pose=='FIST' and self.pinch.down
@@ -377,19 +397,23 @@ class GestureRecognizer:
             pose = "NONE"
 
         # 양손이 보이면(박수 중일 수 있음) 필기를 막는다
+        # 느슨한 기준으로 검지 자세를 유지하는 동안은 엄지가 붙어도 핀치로 바뀌지 않게 막는다.
         r.pen_down = self.pinch.update(
-            ratio, blocked=(pose == "FIST" or ink_busy or (fist_candidate and not self.pinch.down)),
+            ratio, blocked=(pose in ("FIST", "TWO_FINGERS") or ink_busy or kept_pointer or (fist_candidate and not self.pinch.down)),
             observe_release=(ink_busy and len(hands)==1 and not fist_candidate))
         if r.pen_down:
             pose = "PINCH"
         if ink_busy:
             pose = 'NONE'
         r.pose = pose
+        self._prev_pose = pose
 
         r.pen_point = tuple(((lm[THUMB_TIP, :2] + lm[INDEX_TIP, :2]) / 2).astype(int))
-        # 해제 확인 중에는 손 이동을 잉크에 추가하지 않는다.
+        # 해제 확인 중이거나, 손가락이 벌어지기 시작하면(비율 > pinch_hold) 손 이동을 잉크에 추가하지 않는다.
+        # 펜이 실제로 들리기(pinch_off) 전에 손을 떼면서 움직인 길이 선으로 남지 않게 한다.
+        lifting = self.pinch.count>0 or ratio>self.config.get('pinch_hold',float('inf'))
         if r.pen_down:
-            if self.pinch.count>0 and self._last_ink_point is not None:
+            if lifting and self._last_ink_point is not None:
                 r.pen_point = self._last_ink_point
             else:
                 self._last_ink_point = r.pen_point
@@ -402,9 +426,9 @@ class GestureRecognizer:
         n_open = sum(curls[name] > CFG['swipe_open_curl'] or
                      dist(lm[WRIST,:2],lm[tip,:2]) > 1.08*dist(lm[WRIST,:2],lm[tip-2,:2])
                      for name,(_,tip) in FINGERS.items())
-        swipe_ok = (not clap_busy and len(hands) == 1 and pose not in ("PINCH", "FIST", "POINTER")
+        swipe_ok = (not clap_busy and len(hands) == 1 and pose not in ("PINCH", "FIST", "POINTER", "TWO_FINGERS")
                     and n_open >= CFG["swipe_open_fingers"])
-        sw = self.swipe.update(palm_center(lm) if not clap_busy and len(hands) == 1 and pose not in ('PINCH','FIST','POINTER') else None,
+        sw = self.swipe.update(palm_center(lm) if not clap_busy and len(hands) == 1 and pose not in ('PINCH','FIST','POINTER','TWO_FINGERS') else None,
                                swipe_ok, frame_w, frame_h, t)
         if sw:
             r.events.append(sw)

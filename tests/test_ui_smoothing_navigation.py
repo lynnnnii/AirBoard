@@ -1,4 +1,6 @@
 """PDF 보정 연결과 도구/페이지 제스처 충돌 방지를 검사한다."""
+import os
+os.environ.setdefault('AIRBOARD_USER_SETTINGS', os.path.join(os.path.dirname(__file__), '_no_user_settings.json'))  # 개인 설정 없이 팀 기본값으로 검사
 from pathlib import Path
 import tempfile
 import unittest

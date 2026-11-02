@@ -45,13 +45,12 @@
     "colors": [
       "#2563eb",
       "#dc2626",
-      "#16a34a",
       "#111827"
     ],
     "widths": [
+      1,
       2,
-      4,
-      8
+      3
     ],
     "dwell_seconds": 0.65,
     "notification_seconds": 1.2,
@@ -61,11 +60,21 @@
     "navigation_cooldown_seconds": 0.45,
     "handwriting_smoothing": {
       "method": "one_euro",
-      "one_euro_min_cutoff": 1.2,
-      "one_euro_beta": 0.008,
+      "one_euro_min_cutoff": 1.5,
+      "one_euro_beta": 0.01,
       "start_skip": 0,
-      "end_trim": 0
-    }
+      "end_trim": 0,
+      "spline": true
+    },
+    "highlighter_color": "#FFFF00",
+    "eraser_radius": 28,
+    "eraser_hold_frames": 1,
+    "writing_scale": 0.6,
+    "writing_anchor_seconds": 1.0,
+    "highlighter_width": 16,
+    "writing_return_seconds": 0.4,
+    "draw_grace_seconds": 0.3,
+    "draw_resume_break": 150
   },
   "gestures": {
     "pinch_on": 0.2,
@@ -82,12 +91,18 @@
     "clap_approach_drop": 0.3,
     "clap_ink_guard": 0.12,
     "fist_index_fold": 0.65,
-    "fist_frames": 4,
+    "fist_frames": 2,
     "clap_occlusion_close": 2.5,
     "clap_reacquire_seconds": 0.85,
     "swipe_dist": 0.14,
     "swipe_cooldown": 0.45,
-    "pinch_immediate_off": 0.6
+    "pinch_immediate_off": 0.6,
+    "pinch_hold": 0.28,
+    "pointer_keep_curl": 1.3,
+    "pointer_keep_fold": 0.9,
+    "pointer_keep_pinch": 0.15,
+    "two_finger_curl": 1.45,
+    "two_finger_fold": 0.9
   },
   "tracking": {
     "detection_confidence": 0.4

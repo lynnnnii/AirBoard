@@ -30,7 +30,7 @@ class PreviewRenderer:
                 cv2.line(self.ink,a,p,(255,255,255),30,cv2.LINE_AA)
             elif packet.tool=='highlighter':
                 layer = self.ink.copy()
-                cv2.line(layer,a,p,bgr(packet.color),packet.width*4,cv2.LINE_AA)
+                cv2.line(layer,a,p,bgr(packet.color),packet.width,cv2.LINE_AA)
                 cv2.addWeighted(layer,packet.opacity,self.ink,1-packet.opacity,0,dst=self.ink)
             else:
                 cv2.line(self.ink,a,p,bgr(packet.color),packet.width,cv2.LINE_AA)
@@ -46,13 +46,18 @@ class PDFRenderer:
         self.state_path = None if state_dir is None else Path(state_dir)/(self.board.document_key+'.json')
         self.smoother = None
         self._was_active = False
+        self._erase_previous = None
         self.display_position = None
         self._ink_style = None
         self._last_tool = None
         if smoothing_config is not None:
+            from airboard.smoothing.filters import NoFilter
             from airboard.smoothing.stroke import StrokeSmoother, make_filter
             from airboard.render import SmoothedInkBridge
             self.smoother = StrokeSmoother.from_config(smoothing_config)
+            # 형광펜은 슬라이드의 글자를 정확히 덮어야 해서 보정·곡선 없이 원래 좌표를 쓴다 (끝 꼬리 제거만 같게).
+            self.highlighter_smoother = StrokeSmoother(NoFilter(),smoothing_config.get('start_skip',0),
+                                                       smoothing_config.get('end_trim',0))
             self.cursor_filter = make_filter(smoothing_config['method'], smoothing_config)
             self.bridge = SmoothedInkBridge(self.board)
         self._dirty = False
@@ -64,13 +69,17 @@ class PDFRenderer:
                 self.board.close()
                 raise
 
+    def _smoother_for(self, tool: str | None) -> object:
+        """펜은 떨림 보정·곡선, 형광펜은 보정 없음."""
+        return self.highlighter_smoother if tool=='highlighter' else self.smoother
+
     def finish_stroke(self) -> None:
         """꼬리 제거를 적용해 진행 획을 확정한다. 지우개도 먼저 확정한다."""
         if self.smoother is not None:
             from airboard.render import InkStyle
             if self._last_tool == 'eraser':
                 self.board.end_stroke()
-            self.bridge.consume(self.smoother.update(None,False,time.monotonic()),
+            self.bridge.consume(self._smoother_for(self._last_tool).update(None,False,time.monotonic()),
                                 self._ink_style or InkStyle())
             self.cursor_filter.reset()
         self.board.end_stroke()
@@ -79,13 +88,29 @@ class PDFRenderer:
     def consume(self, packet: object) -> np.ndarray:
         """PDF 좌표를 팀 보정기에 통과시켜 미리보기와 최종 획을 분리한다."""
         self.display_position = packet.position
+        tail = None
+        if packet.tool != 'eraser' or not packet.active:
+            self._erase_previous = None
+        if packet.tool == 'eraser':
+            # 주먹을 쥔 채 지나간 길을 반경 간격으로 나눠 닿은 획을 통째로 지운다 (빠르게 움직여도 건너뛰지 않음).
+            self.finish_stroke()
+            if packet.active and packet.position is not None:
+                start = self._erase_previous or packet.position
+                radius = packet.width/2
+                steps = max(1,int(np.linalg.norm(np.asarray(packet.position)-start)/max(radius,1))+1)
+                for p in np.linspace(start,packet.position,steps+1):
+                    self.board.erase_stroke_at(tuple(p),radius=radius)
+                self._erase_previous = packet.position
+            self._dirty = True
+            self.checkpoint(force=not packet.active)
+            return self.board.render_page()
         if self.smoother is None:
             if packet.phase in ('down','up'):
                 self.board.end_stroke()
             self.board.update(packet.position,packet.tool,packet.active,
                               eraser_active=packet.active and packet.tool=='eraser',
                               color=packet.color,
-                              width=30 if packet.tool=='eraser' else packet.width*4 if packet.tool=='highlighter' else packet.width)
+                              width=30 if packet.tool=='eraser' else packet.width)
         else:
             from airboard.render import InkStyle
             now=time.monotonic()
@@ -93,10 +118,13 @@ class PDFRenderer:
                 self.finish_stroke()
             self._last_tool=packet.tool
             if packet.tool in ('pen','highlighter'):
-                self._ink_style=InkStyle(packet.tool,packet.color,packet.width*4 if packet.tool=='highlighter' else packet.width)
-                result=self.smoother.update(packet.position,packet.active,now)
+                self._ink_style=InkStyle(packet.tool,packet.color,packet.width)
+                result=self._smoother_for(packet.tool).update(packet.position,packet.active,now)
                 self.bridge.consume(result,self._ink_style)
                 self.display_position=result.point
+                if packet.active and result.stroke and result.point is not None:
+                    # 곡선 보간은 마지막 한 구간을 다음 프레임에 확정하므로, 그 사이는 직선으로 잠깐 보여 늦게 따라오지 않게 한다.
+                    tail=(result.stroke[-1],result.point,self._ink_style)
             else:
                 if packet.position is None:
                     self.cursor_filter.reset()
@@ -111,7 +139,12 @@ class PDFRenderer:
             self._dirty = True
         self._was_active = packet.active
         self.checkpoint(force=not packet.active)
-        return self.board.render_page()
+        image = self.board.render_page()
+        if tail is not None and tail[2].tool=='pen':
+            a,b,style = tail
+            cv2.line(image,tuple(round(v) for v in a),tuple(round(v) for v in b),bgr(style.color),
+                     max(1,round(style.width)),cv2.LINE_AA)
+        return image
 
     def checkpoint(self, force: bool = False) -> None:
         """획 종료 또는 2초 간격으로 진행 상태를 저장한다."""
@@ -169,7 +202,7 @@ def compose_screen(camera: np.ndarray, slide: np.ndarray, page: int,
     screen[height:] = (32, 32, 32)
     page_label = f'PDF PAGE {page}/{page_count}' if page_count is not None else f'PREVIEW PAGE {page} (no PDF)'
     lines = [f'{page_label} | TOOL: {tool.upper()} | {message}',
-             'S Settings  C Set area  R Reset area  X Clear  Q Quit']
+             'S Settings  C Set area  R Reset area  X Clear  [ ] Text size  Q Quit']
     for i, line in enumerate(lines):
         cv2.putText(screen, line, (16, height + 28 + i * 34),
                     cv2.FONT_HERSHEY_SIMPLEX, .65, (255, 255, 255), 2, cv2.LINE_AA)
@@ -306,6 +339,8 @@ def main() -> None:
                     frame = cv2.flip(frame,1)
                     h,w = frame.shape[:2]
                     hands = tracker.detect(frame)
+                    # 검지로 쓰는 매핑일 때만 두 손가락 멈춤·검지 자세 유지를 켠다 (설정 화면에서 바꾸면 바로 반영)
+                    recognizer.config['index_writing'] = settings.mapping.get('POINTER') == 'draw'
                     result = recognizer.update(hands,w,h,now)
                     trace_result = result
                     state = from_gesture_result(result,(w,h))
@@ -423,6 +458,11 @@ def main() -> None:
                 editing,row = True,0
             elif key in (left,right):
                 message = move_page(-1 if key==left else 1)
+            elif key in (ord('['),ord(']')):
+                # 글씨 크기 30~100% 조절 (이번 실행에만 적용, 기본값은 config의 ui.writing_scale)
+                step = -.1 if key==ord('[') else .1
+                controller.writing_scale = round(min(1.,max(.3,controller.writing_scale+step)),1)
+                message = f'Text size {round(controller.writing_scale*100)}%'
             elif key==ord('x'):
                 if args.pdf:
                     renderer.clear_page()

@@ -8,7 +8,7 @@ import unittest
 import numpy as np
 
 from airboard.smoothing.filters import EMAFilter, NoFilter, OneEuroFilter
-from airboard.smoothing.stroke import DEFAULTS, StrokeSmoother, load_config, make_filter
+from airboard.smoothing.stroke import DEFAULTS, StrokeSmoother, densify, load_config, make_filter
 
 FPS = 30
 
@@ -107,6 +107,38 @@ class StrokeSmootherTest(unittest.TestCase):
             r = s.update((i, 0), False, i / FPS)
             self.assertIsNone(r.stroke)
             self.assertIsNone(r.finished)
+
+
+class SplineTest(unittest.TestCase):
+    """곡선 보간: 보정 점을 지나면서 사이를 촘촘히 채우고, 이미 내보낸 점은 바꾸지 않는다."""
+
+    def corner(self):
+        return [(0, 0), (30, 0), (60, 0), (60, 30), (60, 60)]
+
+    def test_densify_passes_through_points_and_fills_gaps(self):
+        pts = self.corner()
+        out = densify(pts)
+        for p in pts:
+            self.assertIn(p, [tuple(round(v, 6) for v in q) for q in out])
+        gaps = np.linalg.norm(np.diff(np.array(out), axis=0), axis=1)
+        self.assertLess(gaps.max(), 4)      # 직선 길이 기준 3px 간격, 곡선은 조금 더 길다
+
+    def test_live_stroke_only_grows_and_finish_matches_densify(self):
+        s = StrokeSmoother(NoFilter(), 0, 0, spline=True)
+        previous = []
+        for i, p in enumerate(self.corner()):
+            stroke = list(s.update(p, True, i / FPS).stroke)
+            self.assertEqual(stroke[:len(previous)], previous)   # 렌더러가 새 점만 이어 그리면 된다
+            previous = stroke
+        finished = s.update((60, 60), False, 1.).finished
+        np.testing.assert_allclose(finished, densify(self.corner()))
+
+    def test_tail_trim_counts_filtered_points(self):
+        s = StrokeSmoother(NoFilter(), 0, 2, spline=True)
+        for i, p in enumerate(self.corner()):
+            s.update(p, True, i / FPS)
+        finished = s.update((60, 60), False, 1.).finished
+        np.testing.assert_allclose(finished[-1], (60, 0))       # 마지막 보정 점 2개를 지운 곳에서 끝난다
 
 
 class ConfigTest(unittest.TestCase):
