@@ -8,7 +8,7 @@ AirBoard - 제스처 판정 모듈 (담당: Kim Hyunbo)
   - result.pen_point   : 필기 좌표 (카메라 픽셀 좌표) -> 좌표 변환 담당에게 전달
   - result.pen_down    : True면 쓰는 중, False면 펜 든 상태
   - result.pose        : 현재 손 모양 ("PINCH", "FIST", "POINTER", "OPEN", "NONE")
-  - result.events      : 이번 프레임에 발생한 1회성 이벤트 ("DOUBLE_CLAP", "SWIPE_LEFT", "SWIPE_RIGHT")
+  - result.events      : 이번 프레임에 발생한 1회성 이벤트 ("DOUBLE_CLAP", "SWIPE_LEFT/RIGHT" 또는 swipe_axis가 vertical이면 "SWIPE_UP/DOWN")
 """
 
 from collections import deque
@@ -75,6 +75,7 @@ CFG = {
     "swipe_open_ratio": 0.6, # 시간 창 안 프레임 중 이 비율 이상이 '손바닥 편 상태'면 인정 (흔들림 허용)
     "swipe_lost_grace": 0.25,# 빠르게 움직여 손을 잠깐 놓쳐도 이 시간(초)까지는 기록 유지
     "swipe_cooldown": 0.8,
+    "swipe_axis": "horizontal", # "horizontal"이면 SWIPE_LEFT/RIGHT, "vertical"이면 SWIPE_UP/DOWN
     "mode_flash": 0.8,       # NEXT PAGE / PREV PAGE 표시 유지 시간(초)
 }
 
@@ -297,10 +298,15 @@ class SwipeDetector:
         if open_ratio < self.config["swipe_open_ratio"]:
             return None
         dx = self.hist[-1][1] - self.hist[0][1]
-        dy = abs(self.hist[-1][2] - self.hist[0][2])
-        if abs(dx) > self.config["swipe_dist"] and dy < self.config["swipe_max_slope"] * abs(dx):
+        dy = self.hist[-1][2] - self.hist[0][2]
+        vertical = self.config.get("swipe_axis", "horizontal") == "vertical"
+        # 주 이동축과 보조축을 바꿔 같은 기준(이동 거리, 기울기 제한)을 쓴다. 세로는 화면 높이 기준 비율.
+        main, side = (dy, dx) if vertical else (dx, dy)
+        if abs(main) > self.config["swipe_dist"] and abs(side) < self.config["swipe_max_slope"] * abs(main):
             self.hist.clear()
             self.cooldown_until = t + self.config["swipe_cooldown"]
+            if vertical:
+                return "SWIPE_DOWN" if dy > 0 else "SWIPE_UP"
             return "SWIPE_RIGHT" if dx > 0 else "SWIPE_LEFT"
         return None
 
@@ -332,6 +338,8 @@ class GestureRecognizer:
         self.swipe = SwipeDetector(config)
         self.fist_count = 0
         self._last_ink_point = None
+        self._ink_held = 0             # 펜을 떼는 중이라 잉크 좌표를 붙잡아 둔 프레임 수
+        self._rearm_after_clap = False
 
     def update(self, hands, frame_w, frame_h, t):
         """hands: HandTracker.detect() 결과 (손마다 (21,3) 픽셀 좌표). t: 초 단위 시각."""
@@ -343,7 +351,13 @@ class GestureRecognizer:
         if len(hands)>=2 or 'DOUBLE_CLAP' in r.events:
             self._swipe_blocked_until=t+self.config.get('clap_swipe_guard',.7)
             self._ink_blocked_until=t+self.config.get('clap_ink_guard',.12)
+        if 'DOUBLE_CLAP' in r.events and self.config.get('clap_rearm_pinch',False):
+            self._rearm_after_clap=True
         ink_busy=(len(hands)>=2 or t<self._ink_blocked_until)
+        # 박수로 도구를 바꾼 뒤 한 손으로 돌아오면, 손가락을 다시 벌리지 않아도 바로 핀치로 쓸 수 있게 한다.
+        if self._rearm_after_clap and len(hands)==1 and not ink_busy:
+            self.pinch.armed=True
+            self._rearm_after_clap=False
         clap_busy=(len(hands)>=2 or bool(self.clap.claps)
                    or t<self.clap.cooldown_until or t<self._swipe_blocked_until)
 
@@ -387,14 +401,28 @@ class GestureRecognizer:
         r.pose = pose
 
         r.pen_point = tuple(((lm[THUMB_TIP, :2] + lm[INDEX_TIP, :2]) / 2).astype(int))
-        # 해제 확인 중에는 손 이동을 잉크에 추가하지 않는다.
+        # 해제 확인 중이거나 손가락이 벌어지기 시작하면(pinch_hold 초과) 손 이동을 잉크에 추가하지 않는다.
+        # 그 상태가 2프레임 이상 이어진 뒤 손을 옮겨 다시 붙이면 이어 긋지 않고 새 획으로 나눈다.
+        # (한 프레임짜리 오판은 그대로 이어 쓴다)
         if r.pen_down:
-            if self.pinch.count>0 and self._last_ink_point is not None:
+            hold = self.config.get('pinch_hold')
+            lifting = self.pinch.count>0 or (hold is not None and ratio>hold)
+            if lifting and self._last_ink_point is not None:
                 r.pen_point = self._last_ink_point
+                self._ink_held += 1
+            elif (self._ink_held >= 2 and self._last_ink_point is not None
+                  and dist(np.array(r.pen_point,float),np.array(self._last_ink_point,float))
+                  > self.config.get('pinch_resume_break',float('inf'))*palm_size(lm)):
+                r.pen_down = False
+                r.pose = 'NONE'
+                self._last_ink_point = None
+                self._ink_held = 0
             else:
                 self._last_ink_point = r.pen_point
+                self._ink_held = 0
         else:
             self._last_ink_point = None
+            self._ink_held = 0
         r.pointer_point = tuple(lm[INDEX_TIP, :2].astype(int)) if pose != "FIST" \
             else tuple(palm_center(lm).astype(int))
 

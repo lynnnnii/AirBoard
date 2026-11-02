@@ -20,6 +20,13 @@ def hand(x):
 def pair(distance):
     return [hand(100),hand(100+30*distance)]
 
+def vhand(y):
+    """세로 스와이프용: 손을 y만큼 아래로 옮긴 합성 랜드마크."""
+    a=hand(100)
+    a[:,1]+=y-100
+    return a
+
+
 
 class ClapTests(unittest.TestCase):
     def setUp(self):
@@ -59,11 +66,11 @@ class ClapTests(unittest.TestCase):
         with patch('airboard.gestures.gesture.classify_pose',return_value='OPEN'),patch('airboard.gestures.gesture.finger_curls',return_value=curls),patch.object(r.pinch,'update',return_value=False):
             r.update(pair(4),640,480,0)
             for t,x in ((.1,100),(.2,240),(.3,400),(.5,100)):
-                self.assertFalse(r.update([hand(x)],640,480,t).events)
+                self.assertFalse(r.update([vhand(x)],640,480,t).events)
             found=[]
             for t,x in ((1.,100),(1.1,180),(1.2,260)):
-                found+=r.update([hand(x)],640,480,t).events
-            self.assertEqual(found,['SWIPE_RIGHT'])
+                found+=r.update([vhand(x)],640,480,t).events
+            self.assertEqual(found,['SWIPE_DOWN'])
 
     def test_clap_event_toggles_ui_without_page_command(self):
         r=GestureRecognizer(self.config)

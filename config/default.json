@@ -45,13 +45,12 @@
     "colors": [
       "#2563eb",
       "#dc2626",
-      "#16a34a",
       "#111827"
     ],
     "widths": [
       2,
-      4,
-      8
+      3,
+      5
     ],
     "dwell_seconds": 0.65,
     "notification_seconds": 1.2,
@@ -61,11 +60,13 @@
     "navigation_cooldown_seconds": 0.45,
     "handwriting_smoothing": {
       "method": "one_euro",
-      "one_euro_min_cutoff": 1.2,
-      "one_euro_beta": 0.008,
+      "one_euro_min_cutoff": 0.6,
+      "one_euro_beta": 0.004,
       "start_skip": 0,
-      "end_trim": 0
-    }
+      "end_trim": 2
+    },
+    "highlighter_color": "#FFFF00",
+    "highlighter_width": 28
   },
   "gestures": {
     "pinch_on": 0.2,
@@ -87,7 +88,11 @@
     "clap_reacquire_seconds": 0.85,
     "swipe_dist": 0.14,
     "swipe_cooldown": 0.45,
-    "pinch_immediate_off": 0.6
+    "pinch_immediate_off": 0.6,
+    "swipe_axis": "vertical",
+    "pinch_hold": 0.28,
+    "pinch_resume_break": 0.5,
+    "clap_rearm_pinch": true
   },
   "tracking": {
     "detection_confidence": 0.4

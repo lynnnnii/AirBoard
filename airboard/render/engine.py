@@ -75,10 +75,14 @@ def color_bgr(color: str) -> tuple[int, int, int]:
 
 @dataclass
 class _Operation:
-    """작업 당시 투명도도 기록하여 나중 설정 변경에 영향받지 않게 한다."""
+    """작업 당시 투명도도 기록하여 나중 설정 변경에 영향받지 않게 한다.
+
+    erased는 획 단위 지우개 작업이 지운 stroke_id 목록이다. undo하면 그 획이 다시 보인다.
+    """
     stroke: Stroke | None = None
     opacity: float = 1.0
     clear: bool = False
+    erased: list[int] | None = None
 
 
 @dataclass
@@ -143,8 +147,7 @@ class AirBoardRenderer:
         bg = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         canvas = _Canvas(bg, np.zeros(bg.shape, np.float32),
                          np.zeros((*bg.shape[:2], 1), np.float32), bg.copy())
-        for operation in self._history[index]:
-            self._replay(canvas, operation)
+        self._rebuild(canvas, self._history[index])
         self._cache[index] = canvas
         while len(self._cache) > self.config.cache_pages:
             self._cache.popitem(last=False)
@@ -202,8 +205,54 @@ class AirBoardRenderer:
         output = canvas.color[region] + canvas.background[region] * (1.0 - canvas.alpha[region])
         canvas.composed[region] = np.rint(output).clip(0, 255).astype(np.uint8)
 
+    def _rebuild(self, canvas: _Canvas, history: list[_Operation]) -> None:
+        """필기 레이어를 비우고 이력을 재생한다. 획 단위 지우개로 지운 획은 건너뛴다."""
+        canvas.color.fill(0)
+        canvas.alpha.fill(0)
+        canvas.composed[:] = canvas.background
+        erased = {i for op in history if op.erased for i in op.erased}
+        for operation in history:
+            if operation.erased is not None:
+                continue
+            if operation.stroke is not None and operation.stroke.stroke_id in erased:
+                continue
+            self._replay(canvas, operation)
+
+    def _visible_strokes(self, page: int) -> list[Stroke]:
+        """마지막 전체 지우기 이후 남아 있는 펜·형광펜 획."""
+        history = self._history[page]
+        start = max((i + 1 for i, op in enumerate(history) if op.clear), default=0)
+        erased = {i for op in history if op.erased for i in op.erased}
+        return [op.stroke for op in history[start:]
+                if op.stroke is not None and op.stroke.tool in ('pen', 'highlighter')
+                and op.stroke.stroke_id not in erased]
+
+    def erase_at(self, point: Point, radius: float | None = None) -> int:
+        """지우개 원에 닿은 획을 통째로 지운다. 지운 획 수를 반환하며 undo로 되살릴 수 있다."""
+        self.end_stroke()
+        r = self.config.eraser_width / 2 if radius is None else radius
+        p = np.array(point, np.float32)
+        hit = []
+        for stroke in self._visible_strokes(self.current_page):
+            pts = np.array(stroke.points, np.float32)
+            a, b = pts[:-1], pts[1:]
+            if len(pts) == 1:
+                d = float(np.linalg.norm(pts[0] - p))
+            else:
+                ab = b - a
+                t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-9), 0, 1)
+                d = float(np.linalg.norm(a + ab * t[:, None] - p, axis=1).min())
+            if d <= r + stroke.width / 2:
+                hit.append(stroke.stroke_id)
+        if hit:
+            self._history[self.current_page].append(_Operation(erased=hit))
+            self._rebuild(self._canvas(self.current_page), self._history[self.current_page])
+        return len(hit)
+
     def _replay(self, canvas: _Canvas, operation: _Operation) -> None:
         """undo 또는 캐시 재구성 시 작업을 원래 순서대로 재생한다."""
+        if operation.erased is not None:
+            return
         if operation.clear:
             canvas.color.fill(0)
             canvas.alpha.fill(0)
@@ -306,8 +355,14 @@ class AirBoardRenderer:
         """통합용 입력 어댑터. 주먹 지우개는 pen_down과 별도 eraser_active를 쓴다.
 
         UI/메인 루프가 확정한 tool과 보정 좌표만 받는다. GestureState를 변경하지 않는다.
+        지우개는 닿은 획을 통째로 지운다 (픽셀 지우개는 begin_stroke('eraser')로 직접 쓸 때만).
         """
-        enabled = eraser_active if tool == 'eraser' else pen_down and tool in ('pen', 'highlighter')
+        if tool == 'eraser':
+            self.end_stroke()
+            if cursor is not None and eraser_active:
+                self.erase_at(cursor, None if width is None else width / 2)
+            return
+        enabled = pen_down and tool in ('pen', 'highlighter')
         if cursor is None or not enabled:
             self.end_stroke()
             return
@@ -357,11 +412,7 @@ class AirBoardRenderer:
         canvas = self._canvas(self.current_page)
         history.pop()
         # 배경 PDF는 캐시를 재사용하고 필기 레이어만 재구성한다.
-        canvas.color.fill(0)
-        canvas.alpha.fill(0)
-        canvas.composed[:] = canvas.background
-        for operation in history:
-            self._replay(canvas, operation)
+        self._rebuild(canvas, history)
         return True
 
     def clear_page(self) -> None:
@@ -474,6 +525,12 @@ class AirBoardRenderer:
                 for item in operations:
                     if item.get('clear') is True:
                         restored.append(_Operation(clear=True))
+                        continue
+                    if item.get('erased') is not None:
+                        ids=item['erased']
+                        if not isinstance(ids,list) or any(type(i) is not int for i in ids):
+                            raise ValueError('잘못된 지우개 작업')
+                        restored.append(_Operation(erased=list(ids)))
                         continue
                     stroke=Stroke(**item['stroke'])
                     opacity=item['opacity']

@@ -117,5 +117,9 @@ class UIController:
             self.navigation_status = ('page moved' if commands else 'waiting' if self._pending_page
                                       else 'cooldown' if now<self._page_blocked_until else 'ready')
         self.active = bool(active)
-        return RenderPacket(pos,self.tool,bool(active),phase,self.color,self.width,
-                            self.settings.ui['highlighter_opacity'] if self.tool=='highlighter' else 1.,commands)
+        # 형광펜은 팔레트 색·굵기와 무관하게 고정 색(노랑)과 두꺼운 굵기를 쓴다.
+        if self.tool == 'highlighter':
+            ui = self.settings.ui
+            return RenderPacket(pos,self.tool,bool(active),phase,ui.get('highlighter_color','#FFFF00'),
+                                ui.get('highlighter_width',self.width*4),ui['highlighter_opacity'],commands)
+        return RenderPacket(pos,self.tool,bool(active),phase,self.color,self.width,1.,commands)

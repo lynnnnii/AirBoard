@@ -91,17 +91,17 @@ class NavigationTests(unittest.TestCase):
         c=self.controller()
         frame=lambda t,*g:c.update(InputState((.5,.5),frozenset(g)),t)
         frame(0,'PINCH'); frame(.1)
-        self.assertEqual(frame(.2,'SWIPE_RIGHT').commands,())
-        self.assertEqual(frame(.7,'DOUBLE_CLAP','SWIPE_RIGHT').commands,())
-        self.assertEqual(frame(1.3,'SWIPE_RIGHT').commands,('page_next',))
-        self.assertEqual(frame(1.4,'SWIPE_LEFT').commands,())
-        self.assertEqual(frame(2.2,'SWIPE_LEFT','SWIPE_RIGHT').commands,())
+        self.assertEqual(frame(.2,'SWIPE_UP').commands,())
+        self.assertEqual(frame(.7,'DOUBLE_CLAP','SWIPE_UP').commands,())
+        self.assertEqual(frame(1.3,'SWIPE_UP').commands,('page_next',))
+        self.assertEqual(frame(1.4,'SWIPE_DOWN').commands,())
+        self.assertEqual(frame(2.2,'SWIPE_DOWN','SWIPE_UP').commands,())
 
     def test_two_hands_and_pointer_cannot_navigate(self):
         """인식기에서 페이지 이벤트가 섞여 와도 양손·포인터에서는 막는다."""
         c=self.controller()
         result=SimpleNamespace(hands=[object(),object()],pose='OPEN',pen_down=False,
-                               pen_point=(50,50),pointer_point=(50,50),events=['SWIPE_RIGHT'])
+                               pen_point=(50,50),pointer_point=(50,50),events=['SWIPE_UP'])
         self.assertEqual(c.update(from_gesture_result(result,(100,100)),0).commands,())
         result.hands=[object()]; result.pose='POINTER'
         self.assertEqual(c.update(from_gesture_result(result,(100,100)),1).commands,())
@@ -124,7 +124,7 @@ class NavigationTests(unittest.TestCase):
         """네 손가락 모두 OPEN이 아니어도 인식기가 승인한 스와이프를 허용한다."""
         c=self.controller()
         result=SimpleNamespace(hands=[object()],pose='NONE',pen_down=False,
-                               pen_point=(50,50),pointer_point=(50,50),events=['SWIPE_RIGHT'])
+                               pen_point=(50,50),pointer_point=(50,50),events=['SWIPE_UP'])
         state=from_gesture_result(result,(100,100))
         self.assertTrue(state.navigation_allowed)
         self.assertEqual(c.update(state,0).commands,('page_next',))
@@ -142,7 +142,7 @@ class NavigationTests(unittest.TestCase):
         c=self.controller()
         c.update(InputState((.5,.5),frozenset({'PINCH'})),0)
         c.update(InputState((.5,.5)),.1)
-        p=c.update(InputState((.5,.5),frozenset({'SWIPE_RIGHT'})),.2)
+        p=c.update(InputState((.5,.5),frozenset({'SWIPE_UP'})),.2)
         self.assertEqual(p.commands,())
         self.assertEqual(c.update(InputState((.5,.5)),.3).commands,('page_next',))
         self.assertEqual(c.update(InputState((.5,.5)),.4).commands,())
@@ -150,7 +150,7 @@ class NavigationTests(unittest.TestCase):
     def test_passive_palette_does_not_swallow_swipe(self):
         """팔레트를 지나가는 것과 설정 모드 차단을 구별한다."""
         c=self.controller()
-        state=InputState((.2,.03),frozenset({'SWIPE_RIGHT'}))
+        state=InputState((.2,.03),frozenset({'SWIPE_UP'}))
         self.assertEqual(c.update(state,0,suppressed=True,navigation_suppressed=False).commands,('page_next',))
         c=self.controller()
         self.assertEqual(c.update(state,0,suppressed=True,navigation_suppressed=True).commands,())
@@ -161,7 +161,7 @@ class NavigationTests(unittest.TestCase):
             c=self.controller()
             c.update(InputState((.5,.5),frozenset({'PINCH'})),0)
             c.update(InputState((.5,.5)),.1)
-            c.update(InputState((.5,.5),frozenset({'SWIPE_RIGHT'})),.2)
+            c.update(InputState((.5,.5),frozenset({'SWIPE_UP'})),.2)
             c.update(blocked,.22)
             self.assertEqual(c.update(InputState((.5,.5)),.8).commands,())
 
@@ -183,18 +183,18 @@ class NavigationTests(unittest.TestCase):
         self.assertIn('SWIPE_RIGHT',result.events)
 
     def test_faster_swipe_profile_uses_shorter_distance(self):
-        """UI 프로필은 짧은 이동을 인식하며 박수 차단 설정은 바꾸지 않는다."""
+        """UI 프로필은 세로 짧은 이동을 인식하며 박수 차단 설정은 바꾸지 않는다."""
         import json
         from airboard.ui.settings import ROOT
         cfg=json.loads((ROOT/'config/default.json').read_text(encoding='utf-8'))['gestures']
         d=SwipeDetector(cfg)
-        self.assertIsNone(d.update((10,50),True,100,100,0))
-        self.assertIsNone(d.update((18,50),True,100,100,.05))
-        self.assertEqual(d.update((26,50),True,100,100,.1),'SWIPE_RIGHT')
-        self.assertIsNone(d.update((70,50),True,100,100,.2))
-        self.assertIsNone(d.update((70,50),True,100,100,.6))
-        self.assertIsNone(d.update((62,50),True,100,100,.65))
-        self.assertEqual(d.update((54,50),True,100,100,.7),'SWIPE_LEFT')
+        self.assertIsNone(d.update((50,10),True,100,100,0))
+        self.assertIsNone(d.update((50,18),True,100,100,.05))
+        self.assertEqual(d.update((50,26),True,100,100,.1),'SWIPE_DOWN')
+        self.assertIsNone(d.update((50,70),True,100,100,.2))
+        self.assertIsNone(d.update((50,70),True,100,100,.6))
+        self.assertIsNone(d.update((50,62),True,100,100,.65))
+        self.assertEqual(d.update((50,54),True,100,100,.7),'SWIPE_UP')
 
 
 class PinchReliabilityTests(unittest.TestCase):
@@ -238,8 +238,8 @@ class PinchReliabilityTests(unittest.TestCase):
 
 
 class HandwritingEndpointTests(unittest.TestCase):
-    def test_ui_handwriting_profile_does_not_cut_stroke_ends(self):
-        """UI 필기 설정은 짧은 획의 시작과 끝을 자동 삭제하지 않는다."""
+    def test_ui_handwriting_profile_trims_lift_tail_but_keeps_short_strokes(self):
+        """UI 필기 설정은 시작은 그대로 두고, 펜을 떼며 그어진 끝 꼬리는 지운다. 짧은 획은 남긴다."""
         options=dict(Settings().ui['handwriting_smoothing'],method='none')
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'source.pdf'
@@ -251,8 +251,12 @@ class HandwritingEndpointTests(unittest.TestCase):
                 for i,x in enumerate((30,60,90,120)):
                     r.consume(RenderPacket((x,60),'pen',True,'down' if i==0 else 'move','#FF0000',4,1.,()))
                 r.consume(RenderPacket(None,'pen',False,'up','#FF0000',4,1.,()))
+                for i,x in enumerate((30,60,90)):
+                    r.consume(RenderPacket((x,120),'pen',True,'down' if i==0 else 'move','#FF0000',4,1.,()))
+                r.consume(RenderPacket(None,'pen',False,'up','#FF0000',4,1.,()))
                 image=r.board.render_page()
                 self.assertFalse(np.array_equal(image[60,30],bg[60,30]))
-                self.assertFalse(np.array_equal(image[60,120],bg[60,120]))
+                np.testing.assert_array_equal(image[60,120],bg[60,120])
+                self.assertFalse(np.array_equal(image[120,90],bg[120,90]))
             finally:
                 r.close()
