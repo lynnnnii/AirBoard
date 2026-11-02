@@ -19,7 +19,8 @@ class Settings:
 
     def __init__(self, root: Path = ROOT) -> None:
         self.root = Path(root)
-        self.ui = read_json(self.root/'config/default.json')['ui']
+        defaults = read_json(self.root/'config/default.json')['ui']
+        self.ui = defaults.copy()
         self.mapping = read_json(self.root/'config/gestures.json')
         if not self.mapping:
             raise ValueError('기본 제스처 매핑이 비어 있습니다: config/gestures.json을 복원하세요.')
@@ -28,6 +29,14 @@ class Settings:
             user = read_json(self.user_path)
             self.mapping = self.mapping.copy() if user['mapping'] == {} else user['mapping']
             self.ui.update(user['ui'])
+        # 개인 설정 파일은 Git 브랜치 전환 시에도 남는다. 필기 스타일 정책은 현재 버전을 우선한다.
+        for key in ('colors', 'widths', 'highlighter_color', 'highlighter_width', 'eraser_hold_frames'):
+            if key in defaults:
+                self.ui[key] = defaults[key]
+        smoothing = dict(self.ui.get('handwriting_smoothing', {}))
+        smoothing['start_skip'] = defaults['handwriting_smoothing']['start_skip']
+        smoothing['end_trim'] = defaults['handwriting_smoothing']['end_trim']
+        self.ui['handwriting_smoothing'] = smoothing
         self.validate()
 
     def validate(self) -> None:
