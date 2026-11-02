@@ -54,42 +54,42 @@ class StateTests(unittest.TestCase):
 
     def test_strokes_and_tracking_loss(self) -> None:
         self.assertEqual(self.frame().phase,'hover')
-        self.assertEqual(self.frame('PINCH').phase,'down')
-        self.assertEqual(self.frame('PINCH').phase,'move')
+        self.assertEqual(self.frame('POINTER').phase,'down')
+        self.assertEqual(self.frame('POINTER').phase,'move')
         self.assertEqual(self.frame(position=None).phase,'up')
-        self.assertEqual(self.frame('PINCH').phase,'down')
-        self.assertEqual(self.frame('PINCH',position=(2,2)).phase,'up')
-        self.assertEqual(self.frame('PINCH').phase,'down')
+        self.assertEqual(self.frame('POINTER').phase,'down')
+        self.assertEqual(self.frame('POINTER',position=(2,2)).phase,'up')
+        self.assertEqual(self.frame('POINTER').phase,'down')
 
     def test_fist_priority_restore_and_repinch(self) -> None:
-        self.frame('PINCH')
+        self.frame('POINTER')
         for _ in range(self.settings.ui['tool_hold_frames']):
-            p = self.frame('FIST','PINCH')
+            p = self.frame('FIST','POINTER')
         self.assertEqual(p.tool,'eraser')
-        self.assertTrue(self.frame('FIST','PINCH').active)
-        self.assertFalse(self.frame('PINCH').active)
+        self.assertTrue(self.frame('FIST','POINTER').active)
+        self.assertFalse(self.frame('POINTER').active)
         self.assertEqual(self.c.tool,'pen')
-        self.assertFalse(self.frame('PINCH').active)
+        self.assertFalse(self.frame('POINTER').active)
         self.frame()
-        self.assertTrue(self.frame('PINCH').active)
+        self.assertTrue(self.frame('POINTER').active)
 
     def test_event_no_hand_and_page_guard(self) -> None:
         self.assertEqual(self.frame('DOUBLE_CLAP',position=None).tool,'highlighter')
         self.assertEqual(self.frame().tool,'highlighter')
-        self.frame('PINCH')
-        self.assertEqual(self.frame('PINCH','SWIPE_RIGHT').commands,())
+        self.frame('POINTER')
+        self.assertEqual(self.frame('POINTER','SWIPE_DOWN').commands,())
         self.frame()
-        self.assertEqual(self.frame('SWIPE_RIGHT',now=2.).commands,('page_next',))
+        self.assertEqual(self.frame('SWIPE_DOWN',now=2.).commands,('page_next',))
         self.assertEqual(self.frame().commands,())
 
     def test_pointer_and_suppression(self) -> None:
         for _ in range(self.settings.ui['tool_hold_frames']):
-            p = self.frame('POINTER','PINCH')
-        self.assertEqual(p.tool,'pointer')
-        self.assertFalse(p.active)
+            p = self.frame('POINTER','POINTER')
+        self.assertEqual(p.tool,'pen')
+        self.assertTrue(p.active)
         self.frame()
-        self.frame('PINCH')
-        self.assertEqual(self.frame('PINCH',suppressed=True).phase,'up')
+        self.frame('POINTER')
+        self.assertEqual(self.frame('POINTER',suppressed=True).phase,'up')
 
     def test_custom_mapping(self) -> None:
         self.settings.mapping = {'WAVE':'toggle_highlighter','TOUCH':'draw'}
@@ -117,7 +117,7 @@ class StateTests(unittest.TestCase):
     def test_reset_calibration_persists_and_requires_lift(self) -> None:
         """리셋 후 기본 꼭짓점·현재 크기를 저장하고 누른 채 필기 재개를 막는다."""
         self.c.calibration = Calibration([[0,0],[1,0],[1,1],[0,1]],(1280,720))
-        self.frame('PINCH')
+        self.frame('POINTER')
         renderer = PreviewRenderer((1280,720))
         renderer.previous = (10,10)
         with tempfile.TemporaryDirectory() as folder:
@@ -127,9 +127,9 @@ class StateTests(unittest.TestCase):
             np.testing.assert_allclose(saved.corners,self.settings.ui['default_corners'])
             self.assertEqual(saved.size,(1280,720))
         self.assertIsNone(renderer.previous)
-        self.assertFalse(self.frame('PINCH').active)
+        self.assertFalse(self.frame('POINTER').active)
         self.frame()
-        self.assertTrue(self.frame('PINCH').active)
+        self.assertTrue(self.frame('POINTER').active)
 
     def test_footer_is_outside_ink(self) -> None:
         """필기와 카메라를 보존하고 별도의 불투명 상태줄을 덧붙인다."""
@@ -143,10 +143,10 @@ class StateTests(unittest.TestCase):
         self.assertTrue(np.any(screen[540:] == 255))
 
     def test_team_result_adapter(self) -> None:
-        result = SimpleNamespace(hands=[object()],pose='PINCH',pen_down=True,pen_point=(320,240),pointer_point=(400,200),events=['DOUBLE_CLAP'])
+        result = SimpleNamespace(hands=[object()],pose='POINTER',pen_down=True,pen_point=(320,240),pointer_point=(400,200),events=['DOUBLE_CLAP'])
         state = from_gesture_result(result,(641,481))
-        self.assertEqual(state.position,(.5,.5))
-        self.assertEqual(state.gestures,frozenset({'PINCH','DOUBLE_CLAP'}))
+        self.assertEqual(state.position,(.625,200/480))
+        self.assertEqual(state.gestures,frozenset({'POINTER','DOUBLE_CLAP'}))
         result.pose = 'FIST'
         self.assertEqual(from_gesture_result(result,(641,481)).position,(.625,200/480))
 
@@ -161,9 +161,10 @@ class StateTests(unittest.TestCase):
 
     def test_render_and_overlay(self) -> None:
         renderer,overlay = PreviewRenderer((960,540)),Overlay(self.settings)
-        image = renderer.consume(self.frame('PINCH'))
+        renderer.consume(self.frame('POINTER'))
+        image = renderer.consume(self.frame('POINTER'))
         self.assertTrue(np.any(image!=255))
-        overlay.draw(image,self.frame('PINCH'),'pen')
+        overlay.draw(image,self.frame('POINTER'),'pen')
         self.assertEqual(image.shape,(540,960,3))
 
 

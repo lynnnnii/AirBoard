@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-ACTIONS = ('draw','toggle_highlighter','eraser','pointer','page_next','page_prev','none')
+ACTIONS = ('draw','toggle_highlighter','eraser','stop','page_next','page_prev','none')
 
 
 def read_json(path: Path) -> dict:
@@ -23,11 +23,32 @@ class Settings:
         self.mapping = read_json(self.root/'config/gestures.json')
         if not self.mapping:
             raise ValueError('기본 제스처 매핑이 비어 있습니다: config/gestures.json을 복원하세요.')
+        gesture_version = self.ui.get('gesture_profile_version', 0)
         self.user_path = self.root/'config/ui-user.json'
         if self.user_path.exists():
             user = read_json(self.user_path)
+            gesture_version = user['ui'].get('gesture_profile_version', 0)
             self.mapping = self.mapping.copy() if user['mapping'] == {} else user['mapping']
+            default_ui = self.ui.copy()
             self.ui.update(user['ui'])
+            if user['ui'].get('profile_version', 0) < 2:
+                for key in ('colors','widths','highlighter_color','highlighter_width','handwriting_smoothing','profile_version'):
+                    self.ui[key] = default_ui[key]
+                for old,new in (('SWIPE_LEFT','SWIPE_UP'),('SWIPE_RIGHT','SWIPE_DOWN')):
+                    if old in self.mapping:
+                        self.mapping[new] = self.mapping.pop(old)
+        if self.ui.get("profile_version",0)<6:
+            defaults=read_json(self.root/"config/default.json")["ui"]
+            self.ui["handwriting_smoothing"]=defaults["handwriting_smoothing"]
+            self.ui["profile_version"]=6
+        if gesture_version < 1:
+            self.mapping.update({'PINCH':'none','POINTER':'draw','L_SHAPE':'stop'})
+        self.mapping = {k: ('none' if v=='pointer' else v) for k,v in self.mapping.items()}
+        if gesture_version < 2:
+            self.mapping['TWO_FINGERS'] = 'stop'
+        if gesture_version < 3:
+            self.mapping.update({'POINTER':'draw','FIST':'stop','PINCH':'eraser','L_SHAPE':'none','TWO_FINGERS':'none'})
+        self.ui['gesture_profile_version'] = 3
         self.validate()
 
     def validate(self) -> None:

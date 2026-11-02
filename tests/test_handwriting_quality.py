@@ -35,14 +35,10 @@ class HandwritingQualityTests(unittest.TestCase):
         for i in range(3): result=frame(100,.1,i*.05)
         start=result.pen_point
         pending=frame(200,.45,.2)
-        self.assertTrue(pending.pen_down)
-        self.assertEqual(pending.pen_point,start)
-        resumed=frame(120,.1,.25)
+        self.assertFalse(pending.pen_down)
+        for i in range(3): resumed=frame(120,.1,.25+i*.05)
         self.assertTrue(resumed.pen_down)
-        self.assertNotEqual(resumed.pen_point,start)
-        pending=frame(250,.45,.3)
-        self.assertEqual(pending.pen_point,resumed.pen_point)
-        self.assertFalse(frame(300,.45,.35).pen_down)
+        self.assertFalse(frame(300,.45,.5).pen_down)
 
     def test_clear_release_ends_stroke_on_first_frame(self):
         """확실하게 벌린 손은 두 프레임 대기 없이 획을 끝낸다."""

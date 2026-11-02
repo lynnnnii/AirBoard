@@ -13,29 +13,34 @@ from .overlay import Overlay, bgr
 
 
 class PreviewRenderer:
-    """흰 배경 데모 전용 레이어. PDF/저장/undo는 팀 render 담당."""
+    """흰 배경에서도 PDF와 동일한 획/지우개/꼬리 제거를 사용한다."""
     def __init__(self, size: tuple[int,int]) -> None:
-        w,h = size
-        self.ink = np.full((h,w,3),255,np.uint8)
+        import tempfile
+        import pymupdf
+        from dataclasses import replace
+        from airboard.render import RenderConfig
+        from airboard.smoothing.stroke import load_config
+        self._temp = tempfile.TemporaryDirectory()
+        path = Path(self._temp.name)/'blank.pdf'
+        with pymupdf.open() as doc:
+            doc.new_page(width=size[0],height=size[1]); doc.save(path)
+        cfg = replace(RenderConfig.from_json(ROOT/'config/default.json'),max_width=size[0],max_height=size[1])
+        self.renderer = PDFRenderer(str(path),cfg,smoothing_config={**load_config(),**Settings().ui['handwriting_smoothing']})
         self.previous = None
 
+    def __del__(self):
+        if hasattr(self, "renderer"):
+            self.close()
+
     def consume(self, packet: object) -> np.ndarray:
-        """렌더 패킷을 소비하고 UI를 그릴 복사본을 반환한다."""
-        if not packet.active:
-            self.previous = None
-        if packet.active and packet.position:
-            p = tuple(round(v) for v in packet.position)
-            a = self.previous or p
-            if packet.tool=='eraser':
-                cv2.line(self.ink,a,p,(255,255,255),30,cv2.LINE_AA)
-            elif packet.tool=='highlighter':
-                layer = self.ink.copy()
-                cv2.line(layer,a,p,bgr(packet.color),packet.width*4,cv2.LINE_AA)
-                cv2.addWeighted(layer,packet.opacity,self.ink,1-packet.opacity,0,dst=self.ink)
-            else:
-                cv2.line(self.ink,a,p,bgr(packet.color),packet.width,cv2.LINE_AA)
-            self.previous = p
-        return self.ink.copy()
+        return self.renderer.consume(packet)
+
+    def clear_page(self) -> None:
+        self.renderer.clear_page()
+
+    def close(self) -> None:
+        self.renderer.close()
+        self._temp.cleanup()
 
 
 class PDFRenderer:
@@ -46,6 +51,7 @@ class PDFRenderer:
         self.state_path = None if state_dir is None else Path(state_dir)/(self.board.document_key+'.json')
         self.smoother = None
         self._was_active = False
+        self._erase_previous = None
         self.display_position = None
         self._ink_style = None
         self._last_tool = None
@@ -79,13 +85,27 @@ class PDFRenderer:
     def consume(self, packet: object) -> np.ndarray:
         """PDF 좌표를 팀 보정기에 통과시켜 미리보기와 최종 획을 분리한다."""
         self.display_position = packet.position
+        if packet.tool != 'eraser' or not packet.active:
+            self._erase_previous = None
+        if packet.tool == 'eraser':
+            self.finish_stroke()
+            if packet.active and packet.position is not None:
+                start = self._erase_previous or packet.position
+                radius = packet.width/2
+                steps = max(1,int(np.linalg.norm(np.asarray(packet.position)-start)/max(radius,1))+1)
+                for p in np.linspace(start,packet.position,steps+1):
+                    self.board.erase_stroke_at(tuple(p),radius=radius)
+                self._erase_previous = packet.position
+            self._dirty = True
+            self.checkpoint(force=not packet.active)
+            return self.board.render_page()
         if self.smoother is None:
             if packet.phase in ('down','up'):
                 self.board.end_stroke()
             self.board.update(packet.position,packet.tool,packet.active,
                               eraser_active=packet.active and packet.tool=='eraser',
                               color=packet.color,
-                              width=30 if packet.tool=='eraser' else packet.width*4 if packet.tool=='highlighter' else packet.width)
+                              width=30 if packet.tool=='eraser' else packet.width)
         else:
             from airboard.render import InkStyle
             now=time.monotonic()
@@ -93,10 +113,10 @@ class PDFRenderer:
                 self.finish_stroke()
             self._last_tool=packet.tool
             if packet.tool in ('pen','highlighter'):
-                self._ink_style=InkStyle(packet.tool,packet.color,packet.width*4 if packet.tool=='highlighter' else packet.width)
+                self._ink_style=InkStyle(packet.tool,packet.color,packet.width)
                 result=self.smoother.update(packet.position,packet.active,now)
                 self.bridge.consume(result,self._ink_style)
-                self.display_position=result.point
+                self.display_position=result.point if packet.active else packet.position
             else:
                 if packet.position is None:
                     self.cursor_filter.reset()
@@ -169,7 +189,7 @@ def compose_screen(camera: np.ndarray, slide: np.ndarray, page: int,
     screen[height:] = (32, 32, 32)
     page_label = f'PDF PAGE {page}/{page_count}' if page_count is not None else f'PREVIEW PAGE {page} (no PDF)'
     lines = [f'{page_label} | TOOL: {tool.upper()} | {message}',
-             'S Settings  C Set area  R Reset area  X Clear  Q Quit']
+             'S Settings  C Set area  R Reset area  X Clear  Q Quit | UP/DOWN Page']
     for i, line in enumerate(lines):
         cv2.putText(screen, line, (16, height + 28 + i * 34),
                     cv2.FONT_HERSHEY_SIMPLEX, .65, (255, 255, 255), 2, cv2.LINE_AA)
@@ -215,7 +235,7 @@ def main() -> None:
     size = tuple(settings.ui['slide_size'])
     calfile = ROOT/'config/calibration-user.json'
     calibration = Calibration.load(calfile) if calfile.exists() else Calibration(settings.ui['default_corners'],size)
-    renderer = PreviewRenderer(calibration.size)
+    renderer = None if args.pdf else PreviewRenderer(calibration.size)
     if args.pdf:
         from dataclasses import replace
         from airboard.render import RenderConfig
@@ -227,7 +247,8 @@ def main() -> None:
         calibration = Calibration(calibration.corners.tolist(), renderer.board.slide_size)
     controller = UIController(calibration,settings)
     overlay = Overlay(settings)
-    camera_width, camera_height = (512,384) if args.pdf else (640,480)
+    camera_height = calibration.size[1]
+    camera_width = round(camera_height*4/3)
 
     def move_page(offset: int) -> str:
         """실제 페이지를 이동하고 페이지 크기에 맞춰 좌표 변환을 갱신한다."""
@@ -312,9 +333,9 @@ def main() -> None:
                     camera = cv2.resize(frame,(640,480))
             elif args.virtual:
                 t = frame_number/30
-                state = InputState((.5+.28*math.cos(t),.5+.27*math.sin(t*1.8)),frozenset({'PINCH'} if t%4<3 else ()))
+                state = InputState((.5+.28*math.cos(t),.5+.27*math.sin(t*1.8)),frozenset({'POINTER'} if t%4<3 else ()))
             else:
-                gestures = {'PINCH'} if mouse['down'] else set()
+                gestures = {'POINTER'} if mouse['down'] else set()
                 state = InputState(mouse['position'],frozenset(gestures))
             if calibration_points is not None and len(calibration_points)>=4:
                 try:
@@ -360,6 +381,9 @@ def main() -> None:
             for i,p in enumerate(controller.calibration.corners):
                 cv2.circle(camera,(round(float(p[0])*639),round(float(p[1])*479)),5,(0,255,255),-1)
             if state.position:
+                mapped = controller.calibration.transform(state.position)
+                if mapped is not None:
+                    cv2.putText(camera,f'PDF X {mapped[0]/(controller.calibration.size[0]-1):.0%}  Y {mapped[1]/(controller.calibration.size[1]-1):.0%}',(15,450),cv2.FONT_HERSHEY_SIMPLEX,.65,(255,255,255),2)
                 cv2.circle(camera,(round(state.position[0]*639),round(state.position[1]*479)),6,(0,255,0),2)
             if calibration_points is not None:
                 label = f'CAL {len(calibration_points)+1}/4 TL TR BR BL: SPACE or click'
@@ -377,7 +401,7 @@ def main() -> None:
             screen = compose_screen(cv2.resize(camera,(camera_width,camera_height)), slide, page, packet.tool, message,
                                     renderer.board.page_count if args.pdf else None)
             cv2.imshow('AirBoard UI demo',screen)
-            key = cv2.waitKeyEx(16)
+            key = cv2.waitKeyEx(1)
             if key==ord('q') or cv2.getWindowProperty('AirBoard UI demo',cv2.WND_PROP_VISIBLE)<1:
                 break
             up,down,left,right = (2490368,2621440,2424832,2555904)
@@ -418,23 +442,25 @@ def main() -> None:
                     message = f'Reset failed: {exc}'
             elif key==32 and calibration_points is not None and state.position is not None:
                 calibration_points.append(state.position)
+            elif key in (ord('['),ord(']')):
+                controller.writing_scale = round(min(1.,max(.3,controller.writing_scale+(-.1 if key==ord('[') else .1))),1)
+                message = f'Writing size: {controller.writing_scale:.0%} (next stroke)'
             elif key==ord('s'):
                 backup = settings.mapping.copy()
                 editing,row = True,0
-            elif key in (left,right):
-                message = move_page(-1 if key==left else 1)
+            elif key in (up,down):
+                message = move_page(-1 if key==up else 1)
             elif key==ord('x'):
                 if args.pdf:
                     renderer.clear_page()
                 else:
-                    renderer.ink[:] = 255
+                    renderer.clear_page()
                     renderer.previous = None
                 controller.active = False
                 controller.blocked = True
     finally:
         try:
-            if args.pdf:
-                renderer.close()
+            renderer.close()
         finally:
             if trace_stream is not None:
                 trace_stream.close()

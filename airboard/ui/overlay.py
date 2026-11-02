@@ -46,4 +46,4 @@ class Overlay:
                 cv2.rectangle(image,(a,b),(c,d),(0,220,255),2)
         if packet.position:
             p = tuple(round(v) for v in packet.position)
-            cv2.circle(image,p,15 if packet.tool=='eraser' else 7,(0,0,255) if packet.active else (255,100,0),2)
+            cv2.circle(image,p,round(packet.width/2) if packet.tool=='eraser' else 7,(0,0,255) if packet.active else (255,100,0),2)

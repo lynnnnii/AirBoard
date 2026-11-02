@@ -12,8 +12,8 @@
     "max_width": 1280,
     "max_height": 640,
     "cache_pages": 3,
-    "pen_color": "#FF3030",
-    "pen_width": 4.0,
+    "pen_color": "#2563eb",
+    "pen_width": 2,
     "highlighter_color": "#FFFF00",
     "highlighter_width": 24.0,
     "highlighter_opacity": 0.3,
@@ -45,13 +45,12 @@
     "colors": [
       "#2563eb",
       "#dc2626",
-      "#16a34a",
-      "#111827"
+      "#000000"
     ],
     "widths": [
+      1,
       2,
-      4,
-      8
+      3
     ],
     "dwell_seconds": 0.65,
     "notification_seconds": 1.2,
@@ -61,17 +60,24 @@
     "navigation_cooldown_seconds": 0.45,
     "handwriting_smoothing": {
       "method": "one_euro",
-      "one_euro_min_cutoff": 1.2,
-      "one_euro_beta": 0.008,
+      "one_euro_min_cutoff": 3.0,
+      "one_euro_beta": 0.04,
       "start_skip": 0,
       "end_trim": 0
-    }
+    },
+    "highlighter_color": "#FFFF00",
+    "highlighter_width": 24,
+    "profile_version": 6,
+    "eraser_radius": 28,
+    "eraser_hold_frames": 1,
+    "writing_scale": 0.7,
+    "gesture_profile_version": 3
   },
   "gestures": {
     "pinch_on": 0.2,
-    "pinch_off": 0.38,
-    "pinch_on_frames": 3,
-    "pinch_off_frames": 2,
+    "pinch_off": 0.28,
+    "pinch_on_frames": 2,
+    "pinch_off_frames": 1,
     "clap_close": 2.0,
     "clap_open": 2.1,
     "clap_near": 3.5,
@@ -82,12 +88,21 @@
     "clap_approach_drop": 0.3,
     "clap_ink_guard": 0.12,
     "fist_index_fold": 0.65,
-    "fist_frames": 4,
+    "fist_frames": 2,
     "clap_occlusion_close": 2.5,
     "clap_reacquire_seconds": 0.85,
     "swipe_dist": 0.14,
     "swipe_cooldown": 0.45,
-    "pinch_immediate_off": 0.6
+    "pinch_immediate_off": 0.28,
+    "swipe_axis": "vertical",
+    "l_thumb_spread": 0.65,
+    "l_thumb_straight": 0.85,
+    "l_max_cosine": 0.7,
+    "index_pose_grace": 0.16,
+    "index_resume_distance": 0.9,
+    "fist_stop_mode": true,
+    "index_hold_curl": 1.25,
+    "index_hold_reach": 0.25
   },
   "tracking": {
     "detection_confidence": 0.4

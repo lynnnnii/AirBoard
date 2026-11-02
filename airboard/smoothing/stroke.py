@@ -99,6 +99,8 @@ class StrokeSmoother:
             self.filter.reset()
             return SmoothResult(finished=self._finish() if self.stroke is not None else None)
 
+        if pen_down and self.stroke is None:
+            self.filter.reset()
         p = tuple(float(v) for v in self.filter(point, t))
         finished = None
         if pen_down and self.stroke is None:

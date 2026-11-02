@@ -31,14 +31,14 @@ def from_gesture_result(result: object, frame_size: tuple[int,int]) -> InputStat
     if w<2 or h<2:
         raise ValueError('프레임 크기가 너무 작습니다.')
     gestures = set(result.events)
-    if result.pen_down:
+    if result.pen_down and result.pose not in ('POINTER','L_SHAPE','TWO_FINGERS'):
         gestures.add('PINCH')
-    if result.pose in ('FIST','POINTER'):
+    if result.pose in ('FIST','POINTER','L_SHAPE','TWO_FINGERS'):
         gestures.add(result.pose)
-    p = result.pointer_point if result.pose in ('FIST','POINTER') else result.pen_point
+    p = result.pointer_point if result.pointer_point is not None else result.pen_point
     # 손 소실 프레임에서도 DOUBLE_CLAP 같은 이미 판정된 이벤트는 보존한다.
     return InputState(None if p is None else (float(p[0])/(w-1),float(p[1])/(h-1)),frozenset(gestures),
-                      len(result.hands)==1 and result.pose not in ('PINCH','FIST','POINTER') and not result.pen_down)
+                      len(result.hands)==1 and result.pose not in ('PINCH','FIST','POINTER','L_SHAPE','TWO_FINGERS') and not result.pen_down)
 
 
 class UIController:
@@ -56,6 +56,8 @@ class UIController:
         self._page_blocked_until = float('-inf')
         self._pending_page = None
         self.navigation_status = 'ready'
+        self.writing_scale = settings.ui.get('writing_scale',1.)
+        self._writing_anchor = None
 
     def update(self, state: InputState, now: float, suppressed: bool = False, navigation_suppressed: bool | None = None) -> RenderPacket:
         """매 프레임 호출. 팔레트·설정·캘리브레이션 중에는 suppressed=True."""
@@ -64,16 +66,16 @@ class UIController:
         actions = (mapped if not suppressed else
                    mapped & {'toggle_highlighter'} if not nav_suppressed else set())
         previous_tool = self.tool
-        wanted = 'eraser' if 'eraser' in actions else 'pointer' if 'pointer' in actions else None
+        wanted = 'eraser' if 'eraser' in actions and 'stop' not in actions else None
         if wanted == self.candidate:
             self.count += 1
         else:
             self.candidate,self.count = wanted,1
         if wanted is None:
-            if self.temporary:
+            if self.temporary and 'POINTER' not in state.gestures:
                 self.blocked = True
             self.temporary = None
-        elif self.count >= self.settings.ui['tool_hold_frames']:
+        elif self.count >= (self.settings.ui.get('eraser_hold_frames',1) if wanted=='eraser' else self.settings.ui['tool_hold_frames']):
             self.temporary = wanted
         if 'draw' not in actions:
             self.blocked = False
@@ -86,9 +88,16 @@ class UIController:
         if self.tool != previous_tool:
             self.notification,self.notice_until = self.tool,now+self.settings.ui['notification_seconds']
         pos = None if suppressed else self.calibration.transform(state.position)
-        active = pos is not None and wanted == self.temporary and not self.blocked and (self.tool=='eraser' or ('draw' in actions and self.tool in ('pen','highlighter')))
+        active = 'stop' not in actions and pos is not None and wanted == self.temporary and not self.blocked and (self.tool=='eraser' or ('draw' in actions and self.tool in ('pen','highlighter')))
         if self.active and self.tool != previous_tool:
             active = False
+        if active and self.tool in ('pen','highlighter'):
+            if not self.active or self._writing_anchor is None:
+                self._writing_anchor = pos
+                self._stroke_scale = self.writing_scale
+            pos = tuple(a+(p-a)*self._stroke_scale for a,p in zip(self._writing_anchor,pos))
+        else:
+            self._writing_anchor = None
         phase = 'move' if active and self.active else 'down' if active else 'up' if self.active else 'hover'
         quiet = self.settings.ui.get('navigation_quiet_seconds', .15)
         unsafe = (nav_suppressed or active or self.active or wanted or toggle
@@ -117,5 +126,8 @@ class UIController:
             self.navigation_status = ('page moved' if commands else 'waiting' if self._pending_page
                                       else 'cooldown' if now<self._page_blocked_until else 'ready')
         self.active = bool(active)
-        return RenderPacket(pos,self.tool,bool(active),phase,self.color,self.width,
+        color = self.settings.ui.get('highlighter_color','#FFFF00') if self.tool=='highlighter' else self.color
+        width = (self.settings.ui.get('highlighter_width',24) if self.tool=='highlighter' else
+                 2*self.settings.ui.get('eraser_radius',28) if self.tool=='eraser' else self.width)
+        return RenderPacket(pos,self.tool,bool(active),phase,color,width,
                             self.settings.ui['highlighter_opacity'] if self.tool=='highlighter' else 1.,commands)
