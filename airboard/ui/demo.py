@@ -30,7 +30,7 @@ class PreviewRenderer:
                 cv2.line(self.ink,a,p,(255,255,255),30,cv2.LINE_AA)
             elif packet.tool=='highlighter':
                 layer = self.ink.copy()
-                cv2.line(layer,a,p,bgr(packet.color),packet.width*4,cv2.LINE_AA)
+                cv2.line(layer,a,p,bgr(packet.color),packet.width,cv2.LINE_AA)
                 cv2.addWeighted(layer,packet.opacity,self.ink,1-packet.opacity,0,dst=self.ink)
             else:
                 cv2.line(self.ink,a,p,bgr(packet.color),packet.width,cv2.LINE_AA)
@@ -85,7 +85,7 @@ class PDFRenderer:
             self.board.update(packet.position,packet.tool,packet.active,
                               eraser_active=packet.active and packet.tool=='eraser',
                               color=packet.color,
-                              width=30 if packet.tool=='eraser' else packet.width*4 if packet.tool=='highlighter' else packet.width)
+                              width=30 if packet.tool=='eraser' else packet.width)
         else:
             from airboard.render import InkStyle
             now=time.monotonic()
@@ -93,7 +93,7 @@ class PDFRenderer:
                 self.finish_stroke()
             self._last_tool=packet.tool
             if packet.tool in ('pen','highlighter'):
-                self._ink_style=InkStyle(packet.tool,packet.color,packet.width*4 if packet.tool=='highlighter' else packet.width)
+                self._ink_style=InkStyle(packet.tool,packet.color,packet.width)
                 result=self.smoother.update(packet.position,packet.active,now)
                 self.bridge.consume(result,self._ink_style)
                 self.display_position=result.point
