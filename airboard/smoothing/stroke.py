@@ -99,6 +99,9 @@ class StrokeSmoother:
             self.filter.reset()
             return SmoothResult(finished=self._finish() if self.stroke is not None else None)
 
+        # 새 획은 이전 획/커서의 필터 잔상 없이 즉시 첫 좌표부터 시작한다.
+        if pen_down and self.stroke is None:
+            self.filter.reset()
         p = tuple(float(v) for v in self.filter(point, t))
         finished = None
         if pen_down and self.stroke is None:
