@@ -223,23 +223,23 @@ class PinchReliabilityTests(unittest.TestCase):
                 self.assertFalse(d.update(.1)); self.assertFalse(d.update(.1))
                 self.assertTrue(d.update(.1))
 
-    def test_rotating_pinch_distance_spikes_do_not_split_stroke(self):
-        """로그의 일시적 해제 비율 상승 뒤 복귀를 지속 필기로 처리한다."""
+    def test_minor_pinch_separation_immediately_ends_ink(self):
+        """짧은 떼기에도 첫 프레임에 획이 끊겨 다음 획과 연결되지 않는다."""
         import json
         from airboard.ui.settings import ROOT
         cfg=json.loads((ROOT/'config/default.json').read_text(encoding='utf-8'))['gestures']
         d=PinchDetector(cfg)
         for _ in range(cfg['pinch_on_frames']):d.update(.1)
         self.assertTrue(d.down)
-        for ratio in (.12,.15,.35,.13,.46,.16,.53,.24):
-            self.assertTrue(d.update(ratio))
-        self.assertTrue(d.update(.5))
-        self.assertFalse(d.update(.5))
+        self.assertTrue(d.update(.23))
+        self.assertFalse(d.update(.31))
+        self.assertFalse(d.update(.1))
+        self.assertTrue(d.update(.1))
 
 
 class HandwritingEndpointTests(unittest.TestCase):
-    def test_ui_handwriting_profile_does_not_cut_stroke_ends(self):
-        """UI 필기 설정은 짧은 획의 시작과 끝을 자동 삭제하지 않는다."""
+    def test_ui_handwriting_profile_trims_long_strokes_only(self):
+        """UI 끝 꼬리 3점을 제거하되 네 점 이하 짧은 획은 유지한다."""
         options=dict(Settings().ui['handwriting_smoothing'],method='none')
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'source.pdf'
@@ -254,5 +254,11 @@ class HandwritingEndpointTests(unittest.TestCase):
                 image=r.board.render_page()
                 self.assertFalse(np.array_equal(image[60,30],bg[60,30]))
                 self.assertFalse(np.array_equal(image[60,120],bg[60,120]))
+                for i,x in enumerate((30,50,70,90,110,130,150,170)):
+                    r.consume(RenderPacket((x,100),'pen',True,'down' if i==0 else 'move','#FF0000',4,1.,()))
+                r.consume(RenderPacket(None,'pen',False,'up','#FF0000',4,1.,()))
+                image=r.board.render_page()
+                self.assertFalse(np.array_equal(image[100,30],bg[100,30]))
+                self.assertTrue(np.array_equal(image[100,170],bg[100,170]))
             finally:
                 r.close()
