@@ -79,6 +79,7 @@ class _Operation:
     stroke: Stroke | None = None
     opacity: float = 1.0
     clear: bool = False
+    erased_ids: list[int] | None = None
 
 
 @dataclass
@@ -143,8 +144,10 @@ class AirBoardRenderer:
         bg = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         canvas = _Canvas(bg, np.zeros(bg.shape, np.float32),
                          np.zeros((*bg.shape[:2], 1), np.float32), bg.copy())
+        erased = {i for op in self._history[index] for i in (op.erased_ids or [])}
         for operation in self._history[index]:
-            self._replay(canvas, operation)
+            if operation.stroke is None or operation.stroke.stroke_id not in erased:
+                self._replay(canvas, operation)
         self._cache[index] = canvas
         while len(self._cache) > self.config.cache_pages:
             self._cache.popitem(last=False)
@@ -204,6 +207,8 @@ class AirBoardRenderer:
 
     def _replay(self, canvas: _Canvas, operation: _Operation) -> None:
         """undo 또는 캐시 재구성 시 작업을 원래 순서대로 재생한다."""
+        if operation.erased_ids is not None:
+            return
         if operation.clear:
             canvas.color.fill(0)
             canvas.alpha.fill(0)
@@ -319,6 +324,33 @@ class AirBoardRenderer:
             self.begin_stroke(tool, color=chosen_color, width=chosen_width)
         self.add_point(*cursor)
 
+    def erase_stroke_at(self, point: Point, radius: float = 15) -> bool:
+        """접촉한 최상단 획 하나를 지운다. PDF 배경과 다른 획은 보존한다."""
+        self.end_stroke()
+        history = self._history[self.current_page]
+        erased = {i for op in history for i in (op.erased_ids or [])}
+        p = np.asarray(point, dtype=float)
+        for op in reversed(history):
+            if op.clear:
+                break
+            s = op.stroke
+            if s is None or s.tool == 'eraser' or s.stroke_id in erased or not s.points:
+                continue
+            pts = np.asarray(s.points)
+            a, b = pts[:-1], pts[1:]
+            if len(a):
+                v = b-a
+                t = np.clip(((p-a)*v).sum(axis=1)/np.maximum((v*v).sum(axis=1),1e-12),0,1)
+                distance = np.linalg.norm(a+t[:,None]*v-p,axis=1).min()
+            else:
+                distance = np.linalg.norm(pts[0]-p)
+            if distance <= radius+s.width/2:
+                history.append(_Operation(erased_ids=[s.stroke_id]))
+                self._cache.pop(self.current_page,None)
+                self._canvas(self.current_page)
+                return True
+        return False
+
     def render_page(self) -> np.ndarray:
         """UI 없는 BGR 이미지 복사본. 진행 중 획은 원본 상태에 한 번만 합성한다."""
         canvas = self._canvas(self.current_page)
@@ -360,8 +392,10 @@ class AirBoardRenderer:
         canvas.color.fill(0)
         canvas.alpha.fill(0)
         canvas.composed[:] = canvas.background
+        erased = {i for op in history for i in (op.erased_ids or [])}
         for operation in history:
-            self._replay(canvas, operation)
+            if operation.stroke is None or operation.stroke.stroke_id not in erased:
+                self._replay(canvas, operation)
         return True
 
     def clear_page(self) -> None:
@@ -472,6 +506,12 @@ class AirBoardRenderer:
                     continue
                 w,h=self._canvas(index).background.shape[1::-1]
                 for item in operations:
+                    if item.get('erased_ids') is not None:
+                        ids = item['erased_ids']
+                        if not isinstance(ids,list) or any(type(i) is not int or i<1 for i in ids):
+                            raise ValueError('Invalid erased stroke ids')
+                        restored.append(_Operation(erased_ids=ids))
+                        continue
                     if item.get('clear') is True:
                         restored.append(_Operation(clear=True))
                         continue
