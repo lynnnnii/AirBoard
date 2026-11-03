@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from airboard.calibration import Calibration
-from .settings import Settings, ACTIONS, ROOT
+from .settings import Settings, ROOT, allowed_actions
 from .controller import InputState, UIController, from_gesture_result
 from .overlay import Overlay, bgr
 
@@ -339,8 +339,13 @@ def main() -> None:
                     frame = cv2.flip(frame,1)
                     h,w = frame.shape[:2]
                     hands = tracker.detect(frame)
-                    # 검지로 쓰는 매핑일 때만 두 손가락 멈춤·검지 자세 유지를 켠다 (설정 화면에서 바꾸면 바로 반영)
+                    # 매핑에 따라 인식기 판정을 켜고 끈다 (설정 화면에서 바꾸면 바로 반영)
+                    #  - 검지로 쓰기: 검지 자세 유지와 ✌️ 인식
+                    #  - ✌️를 멈춤 말고 다른 동작에 연결: ✌️ 인식 (멈춤은 검지로 쓸 때만 의미가 있다)
+                    #  - 핀치로 쓰기: 손가락이 벌어지기 시작하면 잉크 멈춤 (지우개 등으로 쓸 때는 끈다)
                     recognizer.config['index_writing'] = settings.mapping.get('POINTER') == 'draw'
+                    recognizer.config['two_fingers'] = settings.mapping.get('TWO_FINGERS','none') not in ('none','stop')
+                    recognizer.config['pinch_writing'] = settings.mapping.get('PINCH') == 'draw'
                     result = recognizer.update(hands,w,h,now)
                     trace_result = result
                     state = from_gesture_result(result,(w,h))
@@ -421,8 +426,12 @@ def main() -> None:
                 if key in (up,down):
                     row = (row+(-1 if key==up else 1))%len(names)
                 elif key in (left,right):
+                    # 이 제스처에 의미 있는 동작만 돌아가며 고른다. draw를 고르면 다른 제스처의 draw는 none이 된다.
                     name = names[row]
-                    settings.mapping[name] = ACTIONS[(ACTIONS.index(settings.mapping[name])+(-1 if key==left else 1))%len(ACTIONS)]
+                    choices = allowed_actions(name)
+                    current = settings.mapping[name]
+                    i = choices.index(current) if current in choices else 0
+                    settings.set_action(name, choices[(i+(-1 if key==left else 1))%len(choices)])
                 elif key==ord('r'):
                     from .settings import read_json
                     settings.mapping = read_json(ROOT/'config/gestures.json')

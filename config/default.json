@@ -100,9 +100,10 @@
     "pinch_hold": 0.28,
     "pointer_keep_curl": 1.3,
     "pointer_keep_fold": 0.9,
-    "pointer_keep_pinch": 0.15,
+    "pointer_keep_pinch": 0.2,
     "two_finger_curl": 1.45,
-    "two_finger_fold": 0.9
+    "two_finger_fold": 0.9,
+    "swipe_reverse_guard": 1.0
   },
   "tracking": {
     "detection_confidence": 0.4

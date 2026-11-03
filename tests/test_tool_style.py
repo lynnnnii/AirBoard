@@ -11,6 +11,28 @@ from airboard.ui.overlay import draw_sparkle
 from airboard.ui.settings import Settings
 
 
+def gesture_cfg():
+    """config/default.json의 gestures 설정."""
+    import json
+    from airboard.ui.settings import ROOT
+    return json.loads((ROOT / 'config/default.json').read_text(encoding='utf-8'))['gestures']
+
+
+def feed(recognizer, curls, tips, ratios, pose='NONE', xs=None):
+    """손가락 수치와 엄지-검지 비율을 고정한 합성 손을 프레임마다 넣는다."""
+    from unittest.mock import patch
+    out = []
+    for i, ratio in enumerate(ratios):
+        hand = np.zeros((21, 3), np.float32)
+        hand[:, 0] = xs[i] if xs else 100
+        hand[:, 1] = 50
+        hand[0, 1] = 80
+        with patch('airboard.gestures.gesture.classify_pose', return_value=pose),                 patch('airboard.gestures.gesture.pinch_ratio', return_value=ratio),                 patch('airboard.gestures.gesture.finger_curls', return_value=curls),                 patch('airboard.gestures.gesture.tip_to_palm', return_value=tips):
+            out.append(recognizer.update([hand], 640, 480, len(out) * .05 + getattr(recognizer, '_t', 0)))
+    recognizer._t = getattr(recognizer, '_t', 0) + len(ratios) * .05 + .05
+    return out
+
+
 class ToolStyleTests(unittest.TestCase):
     def test_highlighter_is_always_yellow(self):
         settings = Settings()
@@ -177,29 +199,40 @@ class CustomMappingTests(unittest.TestCase):
         self.assertIsNotNone(moving.position)                 # 커서는 따라온다
         self.assertEqual(c.update(InputState((.6, .5), point), .25).phase, 'down')   # 중지를 접으면 새 획
 
-    def test_recognizer_detects_two_fingers_and_blocks_pinch(self):
-        from unittest.mock import patch
+    def test_recognizer_two_fingers_only_when_enabled_and_never_blocks_pinch(self):
         from airboard.gestures.gesture import GestureRecognizer
-        import json
-        from airboard.ui.settings import ROOT
-        cfg = json.loads((ROOT / 'config/default.json').read_text(encoding='utf-8'))['gestures']
-        hand = np.zeros((21, 3), np.float32)
-        hand[:, 1] = 50
-        hand[0, 1] = 80
         curls = {'index': 1.8, 'middle': 1.7, 'ring': 1., 'pinky': 1.}
         tips = {'index': 1.5, 'middle': 1.4, 'ring': .6, 'pinky': .6}
-        for index_writing in (True, False):
-            r = GestureRecognizer({**cfg, 'index_writing': index_writing})
-            with patch('airboard.gestures.gesture.classify_pose', return_value='NONE'), \
-                    patch('airboard.gestures.gesture.pinch_ratio', return_value=.1), \
-                    patch('airboard.gestures.gesture.finger_curls', return_value=curls), \
-                    patch('airboard.gestures.gesture.tip_to_palm', return_value=tips):
-                results = [r.update([hand], 640, 480, i * .05) for i in range(4)]
-            if index_writing:
-                self.assertTrue(all(x.pose == 'TWO_FINGERS' and not x.pen_down for x in results))
-            else:                                               # 핀치로 쓰는 설정: ✌️ 모양이어도 원래대로 핀치로 써진다
-                self.assertNotIn('TWO_FINGERS', [x.pose for x in results])
-                self.assertTrue(results[-1].pen_down)
+        for flags, expect_two in (({'index_writing': True}, True), ({'two_fingers': True}, True), ({}, False)):
+            r = GestureRecognizer({**gesture_cfg(), **flags})
+            poses = [x.pose for x in feed(r, curls, tips, [.6] * 3)]          # 엄지는 떨어져 있음
+            self.assertEqual('TWO_FINGERS' in poses, expect_two, flags)
+            after = feed(r, curls, tips, [.1] * 4)                           # 같은 손 모양에서 엄지를 검지에 붙이면
+            self.assertTrue(after[-1].pen_down, flags)                       # 막히지 않고 핀치가 된다
+
+    def test_index_writing_switches_to_pinch_without_reopening(self):
+        from airboard.gestures.gesture import GestureRecognizer
+        r = GestureRecognizer({**gesture_cfg(), 'index_writing': True, 'pinch_writing': False})
+        bent = {'index': 1.4, 'middle': 1., 'ring': 1., 'pinky': 1.}
+        folded = {'index': 1.2, 'middle': .7, 'ring': .7, 'pinky': .7}
+        feed(r, bent, folded, [.25], pose='POINTER')
+        kept = feed(r, bent, folded, [.25, .25])
+        self.assertEqual([x.pose for x in kept], ['POINTER', 'POINTER'])      # 검지가 살짝 굽어도 유지
+        pinch = feed(r, bent, folded, [.12] * 3)                             # 엄지를 붙이면
+        self.assertEqual(pinch[-1].pose, 'PINCH')                            # 손을 벌렸다 다시 붙이지 않아도 핀치(지우개)로
+
+    def test_pinch_lift_freeze_only_when_pinch_draws(self):
+        from airboard.gestures.gesture import GestureRecognizer
+        open_ = {'index': 1., 'middle': 1., 'ring': 1., 'pinky': 1.}
+        tips = {'index': .9, 'middle': .6, 'ring': .6, 'pinky': .6}
+        for pinch_writing, frozen in ((True, True), (False, False)):
+            r = GestureRecognizer({**gesture_cfg(), 'pinch_writing': pinch_writing})
+            out = feed(r, open_, tips, [.1, .1, .1, .3, .3], xs=[100, 100, 100, 150, 200])
+            xs = [o.pen_point[0] for o in out if o.pen_down]
+            if frozen:                                                       # 핀치로 쓸 때: 살짝 벌리면 잉크 멈춤 (원래대로)
+                self.assertEqual(xs, [100, 100, 100])
+            else:                                                            # 핀치가 지우개일 때: 위치가 손을 따라간다
+                self.assertEqual(xs, [100, 150, 200])
 
     def test_index_writes_right_after_eraser_or_pointer(self):
         c = self.controller(POINTER='draw', PINCH='eraser', FIST='pointer')
@@ -247,6 +280,53 @@ class SettingsSaveTests(unittest.TestCase):
             default['ui']['writing_scale'] = .8                # 나중에 팀 기본값을 바꾸면
             (root / 'config/default.json').write_text(json.dumps(default), encoding='utf-8')
             self.assertEqual(Settings(root).ui['writing_scale'], .8)   # 개인 파일이 덮어쓰지 않는다
+
+
+class MappingRuleTests(unittest.TestCase):
+    """설정 화면에서 고를 수 있는 조합 규칙."""
+
+    def test_one_shot_and_held_gestures_offer_only_meaningful_actions(self):
+        from airboard.ui.settings import allowed_actions
+        for g in ('DOUBLE_CLAP', 'SWIPE_LEFT', 'SWIPE_RIGHT'):
+            self.assertEqual(set(allowed_actions(g)), {'toggle_highlighter', 'page_next', 'page_prev', 'none'})
+        for g in ('PINCH', 'FIST', 'POINTER', 'TWO_FINGERS'):
+            self.assertNotIn('page_next', allowed_actions(g))
+            self.assertIn('draw', allowed_actions(g))
+
+    def test_draw_moves_to_one_gesture_and_is_required_to_save(self):
+        import shutil, tempfile
+        from pathlib import Path
+        from airboard.ui.settings import ROOT
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'config').mkdir()
+            for name in ('default.json', 'gestures.json'):
+                shutil.copy(ROOT / 'config' / name, root / 'config' / name)
+            s = Settings(root)
+            s.set_action('POINTER', 'draw')
+            self.assertEqual(s.mapping['POINTER'], 'draw')
+            self.assertEqual(s.mapping['PINCH'], 'none')        # 원래 draw였던 핀치는 none으로
+            with self.assertRaises(ValueError):
+                s.set_action('DOUBLE_CLAP', 'eraser')           # 순간형에는 지우개를 연결할 수 없다
+            s.set_action('POINTER', 'none')
+            with self.assertRaisesRegex(ValueError, 'draw'):
+                s.save()                                        # 쓰기 제스처가 없으면 저장 안 됨
+
+    def test_old_personal_file_with_invalid_combos_is_repaired(self):
+        import json, shutil, tempfile
+        from pathlib import Path
+        from airboard.ui.settings import ROOT
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'config').mkdir()
+            for name in ('default.json', 'gestures.json'):
+                shutil.copy(ROOT / 'config' / name, root / 'config' / name)
+            (root / 'config/ui-user.json').write_text(json.dumps({'mapping': {
+                'FIST': 'page_next', 'DOUBLE_CLAP': 'eraser', 'POINTER': 'draw'}, 'ui': {}}), encoding='utf-8')
+            s = Settings(root)                                  # 오류 없이 열린다
+            self.assertEqual(s.mapping['FIST'], 'eraser')       # 기본값으로
+            self.assertEqual(s.mapping['DOUBLE_CLAP'], 'toggle_highlighter')
+            self.assertEqual(list(s.mapping.values()).count('draw'), 1)
 
 
 if __name__ == '__main__':

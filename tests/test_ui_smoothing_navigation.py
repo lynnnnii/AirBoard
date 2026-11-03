@@ -194,9 +194,26 @@ class NavigationTests(unittest.TestCase):
         self.assertIsNone(d.update((18,50),True,100,100,.05))
         self.assertEqual(d.update((26,50),True,100,100,.1),'SWIPE_RIGHT')
         self.assertIsNone(d.update((70,50),True,100,100,.2))
-        self.assertIsNone(d.update((70,50),True,100,100,.6))
-        self.assertIsNone(d.update((62,50),True,100,100,.65))
-        self.assertEqual(d.update((54,50),True,100,100,.7),'SWIPE_LEFT')
+        # 반대 방향은 swipe_reverse_guard(1초)가 지난 뒤에 인식한다 (되돌리는 동작 무시)
+        self.assertIsNone(d.update((70,50),True,100,100,1.2))
+        self.assertIsNone(d.update((62,50),True,100,100,1.25))
+        self.assertEqual(d.update((54,50),True,100,100,1.3),'SWIPE_LEFT')
+
+    def test_return_motion_after_swipe_is_ignored(self):
+        """스와이프 직후 손을 되돌리는 반대 방향 이동은 무시하고, 같은 방향 연속 스와이프는 허용한다."""
+        import json
+        from airboard.ui.settings import ROOT
+        cfg=json.loads((ROOT/'config/default.json').read_text(encoding='utf-8'))['gestures']
+        d=SwipeDetector(cfg)
+        events=[]
+        # 오른쪽으로 쓸고(0~0.1초) 0.6~0.75초에 제자리로 되돌림
+        for t,x in ((0,10),(.05,18),(.1,30),(.6,30),(.65,22),(.7,14),(.75,6)):
+            events.append(d.update((x,50),True,100,100,t))
+        self.assertEqual([e for e in events if e],['SWIPE_RIGHT'])
+        # 같은 방향은 재입력 대기(0.45초)만 지나면 다시 인식
+        for t,x in ((.9,6),(.95,14),(1.,26)):
+            events.append(d.update((x,50),True,100,100,t))
+        self.assertEqual([e for e in events if e],['SWIPE_RIGHT','SWIPE_RIGHT'])
 
 
 class PinchReliabilityTests(unittest.TestCase):
