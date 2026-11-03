@@ -1,4 +1,6 @@
 """박수 가림 허용 및 페이지 오작동 방지를 검증한다."""
+import os
+os.environ.setdefault('AIRBOARD_USER_SETTINGS', os.path.join(os.path.dirname(__file__), '_no_user_settings.json'))  # 개인 설정 없이 팀 기본값으로 검사
 import json
 import unittest
 from unittest.mock import patch

@@ -1,10 +1,9 @@
 {
-  "PINCH": "eraser",
+  "PINCH": "draw",
   "DOUBLE_CLAP": "toggle_highlighter",
-  "FIST": "stop",
-  "POINTER": "draw",
-  "SWIPE_UP": "page_prev",
-  "SWIPE_DOWN": "page_next",
-  "L_SHAPE": "none",
-  "TWO_FINGERS": "none"
+  "FIST": "eraser",
+  "POINTER": "pointer",
+  "SWIPE_LEFT": "page_prev",
+  "SWIPE_RIGHT": "page_next",
+  "TWO_FINGERS": "stop"
 }

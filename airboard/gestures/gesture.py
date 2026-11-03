@@ -7,7 +7,7 @@ AirBoard - 제스처 판정 모듈 (담당: Kim Hyunbo)
 다른 팀원은 GestureRecognizer.update(hands, frame_w, frame_h, t) 결과만 받아서 쓰면 된다.
   - result.pen_point   : 필기 좌표 (카메라 픽셀 좌표) -> 좌표 변환 담당에게 전달
   - result.pen_down    : True면 쓰는 중, False면 펜 든 상태
-  - result.pose        : 현재 손 모양 ("PINCH", "FIST", "POINTER", "OPEN", "NONE")
+  - result.pose        : 현재 손 모양 ("PINCH", "FIST", "POINTER", "TWO_FINGERS", "OPEN", "NONE")
   - result.events      : 이번 프레임에 발생한 1회성 이벤트 ("DOUBLE_CLAP", "SWIPE_LEFT", "SWIPE_RIGHT")
 """
 
@@ -124,9 +124,8 @@ def index_reach(lm):
     return float(np.dot(lm[INDEX_TIP, :2] - lm[INDEX_MCP, :2], axis / s)) / s
 
 
-def classify_pose(lm, curls, tips=None, config=None):
+def classify_pose(lm, curls, tips=None):
     """한 손의 정적인 모양 분류 (핀치 여부는 PinchDetector가 따로 판단)."""
-    cfg = {**CFG, **(config or {})}
     tips = tip_to_palm(lm) if tips is None else tips
     folded = {k: v < CFG["fold_tip"] for k, v in tips.items()}
     extended = {k: v > CFG["curl_extended"] for k, v in curls.items()}
@@ -139,22 +138,9 @@ def classify_pose(lm, curls, tips=None, config=None):
     if folded["index"] and sum(folded.values()) >= CFG["fist_min_folded"] \
             and index_reach(lm) < CFG["fist_index_reach"]:
         return "FIST"
-    # Two raised fingers release ink; no thumb angle or finger spread required.
-    if not cfg.get('fist_stop_mode', False) and extended['index'] and extended['middle'] and folded['ring'] and folded['pinky']:
-        return 'TWO_FINGERS'
     # 2) 포인터: 검지만 펴고 나머지 접힘 + 엄지와 검지가 떨어져 있음
     if extended["index"] and folded["middle"] and folded["ring"] and folded["pinky"] \
             and pinch_ratio(lm) > CFG["pinch_off"]:
-        # Thumb opened sideways relative to the index: L means immediate pen-up.
-        thumb = lm[4, :2] - lm[2, :2]
-        index = lm[8, :2] - lm[5, :2]
-        cosine = float(np.dot(thumb,index)/(np.linalg.norm(thumb)*np.linalg.norm(index)+1e-6))
-        spread = dist(lm[4,:2],lm[5,:2])/palm_size(lm)
-        straight = dist(lm[4,:2],lm[2,:2])/(dist(lm[3,:2],lm[2,:2])+dist(lm[4,:2],lm[3,:2])+1e-6)
-        if (not cfg.get('fist_stop_mode', False) and spread > cfg.get('l_thumb_spread', .65)
-                and straight > cfg.get('l_thumb_straight', .85)
-                and abs(cosine) < cfg.get('l_max_cosine', .7)):
-            return "L_SHAPE"
         return "POINTER"
     # 3) 손바닥 펴기: 네 손가락 모두 폄
     if all(extended.values()):
@@ -289,6 +275,7 @@ class SwipeDetector:
         self.hist = deque()          # (t, x, y, is_open)
         self.last_seen = -1e9
         self.cooldown_until = 0.0
+        self._last_swipe = None      # (방향, 시각) 반대 방향 되돌림 무시용
 
     def update(self, point, is_open, frame_w, frame_h, t):
         # 도구 동작·양손·손 소실 구간의 이동을 스와이프 이력에 섞지 않는다.
@@ -311,15 +298,18 @@ class SwipeDetector:
         if open_ratio < self.config["swipe_open_ratio"]:
             return None
         dx = self.hist[-1][1] - self.hist[0][1]
-        dy = self.hist[-1][2] - self.hist[0][2]
-        vertical = self.config.get("swipe_axis", "vertical") == "vertical"
-        if vertical:
-            dx, dy = dy, dx
-        dy = abs(dy)
+        dy = abs(self.hist[-1][2] - self.hist[0][2])
         if abs(dx) > self.config["swipe_dist"] and dy < self.config["swipe_max_slope"] * abs(dx):
             self.hist.clear()
+            event = "SWIPE_RIGHT" if dx > 0 else "SWIPE_LEFT"
+            # 스와이프 뒤 손을 제자리로 되돌리는 동작이 반대 방향 스와이프로 잡히지 않게,
+            # swipe_reverse_guard 초 동안은 반대 방향을 무시한다 (같은 방향 연속 스와이프는 그대로 허용).
+            if (self._last_swipe is not None and event != self._last_swipe[0]
+                    and t - self._last_swipe[1] < self.config.get('swipe_reverse_guard', 0.)):
+                return None
             self.cooldown_until = t + self.config["swipe_cooldown"]
-            return ("SWIPE_DOWN" if dx > 0 else "SWIPE_UP") if vertical else ("SWIPE_RIGHT" if dx > 0 else "SWIPE_LEFT")
+            self._last_swipe = (event, t)
+            return event
         return None
 
 
@@ -330,64 +320,27 @@ class SwipeDetector:
 class GestureResult:
     hands: list = field(default_factory=list)   # 각 손의 (21,3) 픽셀 좌표 배열
     main_hand: np.ndarray = None                 # 필기에 쓰는 손 (가장 크게 보이는 손)
-    pose: str = "NONE"                           # PINCH / FIST / POINTER / OPEN / NONE
+    pose: str = "NONE"                           # PINCH / FIST / POINTER / TWO_FINGERS / OPEN / NONE
     pen_down: bool = False                       # True = 쓰는 중 (화면에는 WRITE ON으로 표시)
-    pen_point: tuple = None                      # 필기 좌표 (제스처와 무관하게 검지 끝)
+    pen_point: tuple = None                      # 필기 좌표 (엄지끝과 검지끝의 중간점)
     pointer_point: tuple = None                  # 검지 끝 좌표 (포인터·지우개 위치)
     events: list = field(default_factory=list)   # DOUBLE_CLAP, SWIPE_LEFT, SWIPE_RIGHT
     debug: dict = field(default_factory=dict)    # 튜닝용 수치 (핀치 비율, 굽힘 비율 등)
-
-
-class IndexStrokeGate:
-    """Hold an ambiguous pose briefly without drawing its uncertain coordinates.
-
-    Explicit stop/tools and tracking loss always release immediately. A distant
-    reacquisition releases instead of joining unrelated locations with a line.
-    """
-
-    def __init__(self, config=None):
-        self.config = config or {}
-        self.reset()
-
-    def reset(self):
-        self.point = None
-        self.last_seen = float('-inf')
-        self.pending = False
-
-    def update(self, pose, point, t, palm_scale, blocked=False):
-        if blocked or point is None or pose not in ('POINTER', 'NONE'):
-            self.reset()
-            return pose, point
-        if pose == 'POINTER':
-            if (self.pending and self.point is not None
-                    and dist(np.asarray(point), np.asarray(self.point)) >
-                    self.config.get('index_resume_distance', .45)*palm_scale):
-                self.reset()
-                return 'NONE', point
-            self.point, self.last_seen, self.pending = point, t, False
-            return pose, point
-        if (self.point is not None and
-                0 <= t-self.last_seen <= self.config.get('index_pose_grace', .065)):
-            self.pending = True
-            return 'POINTER', self.point
-        self.reset()
-        return pose, point
 
 
 class GestureRecognizer:
     """랜드마크 리스트를 받아 프레임마다 GestureResult를 낸다."""
 
     def __init__(self, config=None):
-        self.index_gate = IndexStrokeGate(config)
         self.pinch = PinchDetector(config)
         self.config = {**CFG, **(config or {})}
         self.clap = ClapDetector(config)
         self._swipe_blocked_until = 0.
         self._ink_blocked_until = 0.
-        self._was_ink_busy = False
         self.swipe = SwipeDetector(config)
         self.fist_count = 0
         self._last_ink_point = None
+        self._prev_pose = 'NONE'     # 직전 프레임 자세 (검지 자세 유지 판정용)
 
     def update(self, hands, frame_w, frame_h, t):
         """hands: HandTracker.detect() 결과 (손마다 (21,3) 픽셀 좌표). t: 초 단위 시각."""
@@ -400,16 +353,12 @@ class GestureRecognizer:
             self._swipe_blocked_until=t+self.config.get('clap_swipe_guard',.7)
             self._ink_blocked_until=t+self.config.get('clap_ink_guard',.12)
         ink_busy=(len(hands)>=2 or t<self._ink_blocked_until)
-        if ink_busy and not self._was_ink_busy:
-            self.pinch.armed = False
-        self._was_ink_busy = ink_busy
         clap_busy=(len(hands)>=2 or bool(self.clap.claps)
                    or t<self.clap.cooldown_until or t<self._swipe_blocked_until)
 
         if not hands:
-            self.index_gate.reset()
-            if not ink_busy:
-                self.pinch.update(None)
+            self.pinch.update(None)
+            self._prev_pose = 'NONE'
             self._last_ink_point = None
             self.fist_count = 0
             self.swipe.update(None, False, frame_w, frame_h, t)
@@ -421,69 +370,80 @@ class GestureRecognizer:
         r.main_hand = lm
         curls = finger_curls(lm)
         tips = tip_to_palm(lm)
-        pose = classify_pose(lm, curls, tips, self.config)
+        pose = classify_pose(lm, curls, tips)
         ratio = pinch_ratio(lm)
-        fist_stop = self.config.get('fist_stop_mode', False)
-        # Once writing, tolerate partially relaxed fingers while the index is
-        # still clearly pointing. Never bridge a fist, pinch or open palm.
-        if (fist_stop and pose in ('NONE', 'L_SHAPE', 'TWO_FINGERS')
-                and self.index_gate.point is not None
-                and ratio > self.config['pinch_off']
-                and curls['index'] > self.config.get('index_hold_curl', 1.25)
-                and index_reach(lm) > self.config.get('index_hold_reach', .25)):
+        # 아래 두 판정은 UI가 매핑을 보고 켤 때만 쓴다. 핀치로 쓰는 기본 설정에서는 원래 판정과 똑같이 동작해야 한다.
+        #  - index_writing: 검지로 쓰는 설정 (검지 자세 유지 + ✌️ 인식)
+        #  - two_fingers: ✌️를 다른 동작에 연결한 설정 (✌️ 인식만)
+        # 두 판정 모두 엄지가 검지에 붙은 핀치 시작 구간(pinch_on 미만)과 핀치 중에는 끼어들지 않고,
+        # 핀치 판정기를 막지도 않는다. 그래서 검지로 쓰다가도 엄지를 붙이면 바로 핀치로 넘어간다.
+        index_mode = self.config.get('index_writing', False)
+        pinch_free = not self.pinch.down and ratio > self.config['pinch_on']
+        # 검지·중지 두 손가락 펴기(✌️): 검지로 쓰다가 펜을 드는 '멈춤' 제스처. 약지·새끼는 접혀 있어야 한다.
+        # 두 손가락 사이 간격은 보지 않는다.
+        two = self.config.get('two_finger_curl', CFG['curl_extended'])
+        if ((index_mode or self.config.get('two_fingers', False)) and pinch_free and pose == 'NONE'
+                and curls['index'] > two and curls['middle'] > two
+                and all(tips[k] < self.config.get('two_finger_fold', CFG['fold_tip']) for k in ('ring', 'pinky'))):
+            pose = 'TWO_FINGERS'
+        # 검지 자세가 이어지는 중에는 기준을 느슨하게 유지한다(히스테리시스). 글씨를 쓸 때는 검지가 살짝 굽고
+        # 엄지가 검지 쪽에 붙기 쉬워서, 처음 판정 기준(검지 펴짐 1.55, 엄지 간격 0.38)을 계속 요구하면 자꾸 끊긴다.
+        kept_pointer = (index_mode and pinch_free and pose == 'NONE' and self._prev_pose == 'POINTER'
+                        and curls['index'] > self.config.get('pointer_keep_curl', CFG['curl_extended'])
+                        and all(tips[k] < self.config.get('pointer_keep_fold', CFG['fold_tip'])
+                                for k in ('middle', 'ring', 'pinky'))
+                        and ratio > self.config.get('pointer_keep_pinch', CFG['pinch_off']))
+        if kept_pointer:
             pose = 'POINTER'
 
         # 쓰는 중 닫힌 핀치는 유지한다. 지우개 전환은 pen-up 후에만 허용한다.
-        if (not fist_stop and pose=='FIST' and self.pinch.down
+        if (pose=='FIST' and self.pinch.down
                 and ratio<=self.pinch.config['pinch_off']):
             pose='NONE'
         # 핀치한 손의 나머지 손가락을 접는 자세와 주먹을 구분한다.
-        if not fist_stop and pose=='FIST' and tips['index']>self.config.get('fist_index_fold',.65):
+        if pose=='FIST' and tips['index']>self.config.get('fist_index_fold',.65):
             pose='NONE'
         fist_candidate = pose=="FIST"
         self.fist_count = self.fist_count + 1 if fist_candidate else 0
         is_fist = self.fist_count >= self.config.get('fist_frames',CFG['fist_frames'])
-        if pose == "FIST" and not is_fist and not fist_stop:
+        if pose == "FIST" and not is_fist:
             pose = "NONE"
 
         # 양손이 보이면(박수 중일 수 있음) 필기를 막는다
-        if fist_stop and not ink_busy and not fist_candidate and ratio > self.config['pinch_off']:
-            self.pinch.armed = True
         r.pen_down = self.pinch.update(
-            ratio, blocked=(pose in ("FIST", "POINTER", "L_SHAPE", "TWO_FINGERS") or ink_busy or (fist_candidate and not self.pinch.down)),
-            observe_release=(ink_busy and not fist_candidate))
-        if fist_stop and pose == 'POINTER' and not ink_busy:
-            self.pinch.armed = True
+            ratio, blocked=(pose == "FIST" or ink_busy or (fist_candidate and not self.pinch.down)),
+            observe_release=(ink_busy and len(hands)==1 and not fist_candidate))
         if r.pen_down:
             pose = "PINCH"
         if ink_busy:
             pose = 'NONE'
-        pose, index_point = self.index_gate.update(
-            pose, tuple(lm[INDEX_TIP, :2]), t, palm_size(lm),
-            blocked=ink_busy or fist_candidate)
-        if pose == "POINTER":
-            r.pen_down = True
         r.pose = pose
+        self._prev_pose = pose
 
-        r.pen_point = index_point
-        # 해제 확인 중에는 손 이동을 잉크에 추가하지 않는다.
+        r.pen_point = tuple(((lm[THUMB_TIP, :2] + lm[INDEX_TIP, :2]) / 2).astype(int))
+        # 해제 확인 중이거나, 손가락이 벌어지기 시작하면(비율 > pinch_hold) 손 이동을 잉크에 추가하지 않는다.
+        # 펜이 실제로 들리기(pinch_off) 전에 손을 떼면서 움직인 길이 선으로 남지 않게 한다.
+        # pinch_hold는 핀치로 쓸 때만 쓴다(pinch_writing, UI가 매핑을 보고 끈다). 핀치를 지우개 등에 연결했을 때
+        # 손가락을 살짝 벌렸다고 지우개 위치까지 멈추면 안 되기 때문이다. 해제 확인 중 고정은 원래 동작 그대로 둔다.
+        hold = self.config.get('pinch_hold') if self.config.get('pinch_writing', True) else None
+        lifting = self.pinch.count>0 or (hold is not None and ratio>hold)
         if r.pen_down:
-            if self.pinch.count>0 and self._last_ink_point is not None:
+            if lifting and self._last_ink_point is not None:
                 r.pen_point = self._last_ink_point
             else:
                 self._last_ink_point = r.pen_point
         else:
             self._last_ink_point = None
-        r.pointer_point = index_point if pose != "FIST" \
-            else tuple(palm_center(lm))
+        r.pointer_point = tuple(lm[INDEX_TIP, :2].astype(int)) if pose != "FIST" \
+            else tuple(palm_center(lm).astype(int))
 
         # 양손이 보이면(박수 중일 수 있음) 스와이프도 막는다. 박수 때 손 위치가 튀면서 스와이프로 오인되는 것 방지
         n_open = sum(curls[name] > CFG['swipe_open_curl'] or
                      dist(lm[WRIST,:2],lm[tip,:2]) > 1.08*dist(lm[WRIST,:2],lm[tip-2,:2])
                      for name,(_,tip) in FINGERS.items())
-        swipe_ok = (not clap_busy and len(hands) == 1 and pose not in ("PINCH", "FIST", "POINTER", "L_SHAPE", "TWO_FINGERS")
+        swipe_ok = (not clap_busy and len(hands) == 1 and pose not in ("PINCH", "FIST", "POINTER", "TWO_FINGERS")
                     and n_open >= CFG["swipe_open_fingers"])
-        sw = self.swipe.update(palm_center(lm) if not clap_busy and len(hands) == 1 and pose not in ('PINCH','FIST','POINTER','L_SHAPE','TWO_FINGERS') else None,
+        sw = self.swipe.update(palm_center(lm) if not clap_busy and len(hands) == 1 and pose not in ('PINCH','FIST','POINTER','TWO_FINGERS') else None,
                                swipe_ok, frame_w, frame_h, t)
         if sw:
             r.events.append(sw)
