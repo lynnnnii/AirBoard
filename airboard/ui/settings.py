@@ -4,13 +4,13 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-ACTIONS = ('draw','stop','toggle_highlighter','eraser','pointer','page_next','page_prev','none')
+ACTIONS = ('draw','stop','toggle_highlighter','eraser','pointer','undo','redo','page_next','page_prev','none')
 
 # 제스처 종류별로 의미 있는 동작만 고를 수 있다.
 #  - 순간형(한 프레임짜리 이벤트): 쓰기·지우기·포인터처럼 '하는 동안' 동작은 한 프레임만 켜져 의미가 없다.
 #  - 유지형(그 모양을 하는 동안 계속): 페이지 넘기기는 쓰기·지우기와 헷갈려 실수로 넘어가기 쉬워 뺀다.
-ONE_SHOT_GESTURES = ('DOUBLE_CLAP','SWIPE_LEFT','SWIPE_RIGHT','SWIPE_UP','SWIPE_DOWN')
-ONE_SHOT_ACTIONS = ('toggle_highlighter','page_next','page_prev','none')
+ONE_SHOT_GESTURES = ('DOUBLE_CLAP','SWIPE_LEFT','SWIPE_RIGHT','SWIPE_UP','SWIPE_DOWN','THUMB_LEFT','THUMB_RIGHT')
+ONE_SHOT_ACTIONS = ('toggle_highlighter','undo','redo','page_next','page_prev','none')
 HELD_ACTIONS = ('draw','stop','toggle_highlighter','eraser','pointer','none')
 
 

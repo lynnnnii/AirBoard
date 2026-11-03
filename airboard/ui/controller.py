@@ -72,6 +72,10 @@ class UIController:
         nav_suppressed = suppressed if navigation_suppressed is None else navigation_suppressed
         actions = (mapped if not suppressed else
                    mapped & {'toggle_highlighter'} if not nav_suppressed else set())
+        history_action = next(iter(mapped & {'undo','redo'}), None)
+        if history_action:
+            actions = set()
+            self._draw_seen = float('-inf')
         # 'stop'(기본: 검지·중지 두 손가락)은 쓰는 중이라도 그 프레임에 바로 펜을 든다.
         # 아래 흔들림 유예로 이어 쓰지 않도록 마지막 쓰기 시각도 지운다.
         if 'stop' in actions:
@@ -83,6 +87,7 @@ class UIController:
             self._draw_seen = now
             self._draw_by_pinch = self.settings.mapping.get('PINCH') == 'draw' and 'PINCH' in state.gestures
         holding = ('draw' not in actions and self.active and self.tool in ('pen','highlighter')
+                   and not history_action
                    and not self._draw_by_pinch and state.position is not None and not suppressed
                    and not mapped & {'eraser','pointer'}
                    and now-self._draw_seen <= self.settings.ui.get('draw_grace_seconds',.2))
@@ -114,7 +119,7 @@ class UIController:
         if self.tool != previous_tool:
             self.notification,self.notice_until = self.tool,now+self.settings.ui['notification_seconds']
         pos = None if suppressed else self.calibration.transform(state.position)
-        active = pos is not None and wanted == self.temporary and not self.blocked and (self.tool=='eraser' or ('draw' in actions and self.tool in ('pen','highlighter')))
+        active = not history_action and pos is not None and wanted == self.temporary and not self.blocked and (self.tool=='eraser' or ('draw' in actions and self.tool in ('pen','highlighter')))
         if self.active and self.tool != previous_tool:
             active = False
         # 글씨 축소(펜만): 손 이동을 기준점에서 writing_scale배로 줄여 슬라이드에 작게 쓴다.
@@ -157,7 +162,12 @@ class UIController:
         # 설정에서 박수를 페이지 이동에 연결했다면 쓰는 중이 아닐 때 그 프레임에 바로 넘긴다.
         clap_pages = ({self.settings.mapping.get('DOUBLE_CLAP')} & {'page_next','page_prev'}
                       if 'DOUBLE_CLAP' in state.gestures and not nav_suppressed else set())
-        if clap_pages and not (active or self.active or wanted) and now >= self._clap_page_until:
+        if history_action:
+            commands = (history_action,)
+            self._pending_page = None
+            self._page_blocked_until = now + quiet
+            self.navigation_status = 'history changed'
+        elif clap_pages and not (active or self.active or wanted) and now >= self._clap_page_until:
             commands = (clap_pages.pop(),)
             self._pending_page = None
             self._clap_page_until = self._page_blocked_until = now + self.settings.ui.get('navigation_cooldown_seconds', .8)

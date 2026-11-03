@@ -124,11 +124,32 @@ def index_reach(lm):
     return float(np.dot(lm[INDEX_TIP, :2] - lm[INDEX_MCP, :2], axis / s)) / s
 
 
-def classify_pose(lm, curls, tips=None):
+def classify_pose(lm, curls, tips=None, config=None):
     """한 손의 정적인 모양 분류 (핀치 여부는 PinchDetector가 따로 판단)."""
     tips = tip_to_palm(lm) if tips is None else tips
     folded = {k: v < CFG["fold_tip"] for k, v in tips.items()}
     extended = {k: v > CFG["curl_extended"] for k, v in curls.items()}
+
+    cfg = {**CFG, **(config or {})}
+    # Undo/redo needs a clearly extended, straight thumb pointed sideways.
+    thumb = lm[THUMB_TIP, :2] - lm[2, :2]
+    thumb_x, thumb_y = float(thumb[0]) / palm_size(lm), float(thumb[1]) / palm_size(lm)
+    thumb_reach = dist(lm[THUMB_TIP, :2], lm[INDEX_MCP, :2]) / palm_size(lm)
+    thumb_straight = dist(lm[2, :2], lm[THUMB_TIP, :2]) / (
+        dist(lm[2, :2], lm[3, :2]) + dist(lm[3, :2], lm[THUMB_TIP, :2]) + 1e-6)
+    # Redo is designed for the user's right hand: the thumb alone points right,
+    # since the curled fingers are naturally hidden from the camera in that pose.
+    # Undo keeps the curled-finger check to stay distinct from the eraser fist.
+    thumb_sideways = (thumb_reach > cfg.get('history_thumb_reach', .8)
+            and abs(thumb_x) > cfg.get('history_thumb_x_min', .5)
+            and abs(thumb_x) > cfg.get('history_thumb_side_ratio', 1.3) * abs(thumb_y)
+            and thumb_straight > cfg.get('history_thumb_straight', .85))
+    if (thumb_sideways and thumb_x > 0
+            and sum(folded.values()) >= cfg.get('history_redo_min_folded_fingers', 0)):
+        return "THUMB_RIGHT"
+    if (thumb_sideways and thumb_x < 0
+            and sum(folded.values()) >= cfg.get('history_min_folded_fingers', 3)):
+        return "THUMB_LEFT"
 
     # 1) 주먹: 검지가 접혀 있고, 네 손가락 중 fist_min_folded개 이상 접힘.
     #    MediaPipe는 주먹일 때 손가락 하나쯤은 덜 접힌 것으로 잡는 경우가 많아 4개 모두를 요구하지 않는다.
@@ -341,6 +362,8 @@ class GestureRecognizer:
         self.fist_count = 0
         self._last_ink_point = None
         self._prev_pose = 'NONE'     # 직전 프레임 자세 (검지 자세 유지 판정용)
+        self._prev_history_pose = None
+        self._history_cooldown_until = float('-inf')
 
     def update(self, hands, frame_w, frame_h, t):
         """hands: HandTracker.detect() 결과 (손마다 (21,3) 픽셀 좌표). t: 초 단위 시각."""
@@ -359,6 +382,7 @@ class GestureRecognizer:
         if not hands:
             self.pinch.update(None)
             self._prev_pose = 'NONE'
+            self._prev_history_pose = None
             self._last_ink_point = None
             self.fist_count = 0
             self.swipe.update(None, False, frame_w, frame_h, t)
@@ -370,7 +394,14 @@ class GestureRecognizer:
         r.main_hand = lm
         curls = finger_curls(lm)
         tips = tip_to_palm(lm)
-        pose = classify_pose(lm, curls, tips)
+        pose = classify_pose(lm, curls, tips, self.config)
+        if pose in ('THUMB_LEFT', 'THUMB_RIGHT'):
+            if pose != self._prev_history_pose and t >= self._history_cooldown_until:
+                r.events.append(pose)
+                self._history_cooldown_until = t + self.config.get('history_gesture_cooldown', .55)
+            self._prev_history_pose = pose
+        else:
+            self._prev_history_pose = None
         ratio = pinch_ratio(lm)
         # 아래 두 판정은 UI가 매핑을 보고 켤 때만 쓴다. 핀치로 쓰는 기본 설정에서는 원래 판정과 똑같이 동작해야 한다.
         #  - index_writing: 검지로 쓰는 설정 (검지 자세 유지 + ✌️ 인식)

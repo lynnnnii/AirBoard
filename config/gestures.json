@@ -5,5 +5,7 @@
   "POINTER": "pointer",
   "SWIPE_LEFT": "page_prev",
   "SWIPE_RIGHT": "page_next",
-  "TWO_FINGERS": "stop"
+  "TWO_FINGERS": "stop",
+  "THUMB_LEFT": "undo",
+  "THUMB_RIGHT": "redo"
 }
