@@ -113,6 +113,7 @@ class AirBoardRenderer:
             raise ValueError('암호가 없고 페이지가 있는 PDF가 필요합니다.')
         self.current_page = 0
         self._history: list[list[_Operation]] = [[] for _ in self.doc]
+        self._redo: list[list[_Operation]] = [[] for _ in self.doc]
         self._cache: OrderedDict[int, _Canvas] = OrderedDict()
         self._active: _Active | None = None
         self._next_id = 0
@@ -260,6 +261,7 @@ class AirBoardRenderer:
         if active.stroke.points:
             self._apply(self._canvas(active.stroke.page), active)
             self._history[active.stroke.page].append(_Operation(active.stroke, active.opacity))
+            self._redo[active.stroke.page].clear()
         self._active = None
 
     def discard_preview(self) -> None:
@@ -346,6 +348,7 @@ class AirBoardRenderer:
                 distance = np.linalg.norm(pts[0]-p)
             if distance <= radius+s.width/2:
                 history.append(_Operation(erased_ids=[s.stroke_id]))
+                self._redo[self.current_page].clear()
                 self._cache.pop(self.current_page,None)
                 self._canvas(self.current_page)
                 return True
@@ -386,16 +389,20 @@ class AirBoardRenderer:
         history = self._history[self.current_page]
         if not history:
             return False
-        canvas = self._canvas(self.current_page)
-        history.pop()
-        # 배경 PDF는 캐시를 재사용하고 필기 레이어만 재구성한다.
-        canvas.color.fill(0)
-        canvas.alpha.fill(0)
-        canvas.composed[:] = canvas.background
-        erased = {i for op in history for i in (op.erased_ids or [])}
-        for operation in history:
-            if operation.stroke is None or operation.stroke.stroke_id not in erased:
-                self._replay(canvas, operation)
+        self._redo[self.current_page].append(history.pop())
+        self._cache.pop(self.current_page, None)
+        self._canvas(self.current_page)
+        return True
+
+    def redo(self) -> bool:
+        """현재 페이지에서 실행 취소한 마지막 작업을 다시 적용한다."""
+        self.end_stroke()
+        stack = self._redo[self.current_page]
+        if not stack:
+            return False
+        self._history[self.current_page].append(stack.pop())
+        self._cache.pop(self.current_page, None)
+        self._canvas(self.current_page)
         return True
 
     def clear_page(self) -> None:
@@ -403,6 +410,7 @@ class AirBoardRenderer:
         self.end_stroke()
         operation = _Operation(clear=True)
         self._history[self.current_page].append(operation)
+        self._redo[self.current_page].clear()
         self._replay(self._canvas(self.current_page), operation)
 
     def operation_count(self, page: int | None = None) -> int:
@@ -536,6 +544,7 @@ class AirBoardRenderer:
             raise ValueError(f'필기 저장 파일을 복원할 수 없습니다: {path}') from exc
         self._active=None
         self._history=history
+        self._redo=[[] for _ in self.doc]
         self._next_id=next_id
         self._cache.clear()
         self.current_page=page
