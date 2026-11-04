@@ -149,8 +149,11 @@ class UIController:
             self._last_pos = pos
         phase ='move' if active and self.active else 'down' if active else 'up' if self.active else 'hover'
         # 손 제스처로 페이지를 넘기는 기능은 오작동 방지를 위해 비활성화한다.
-        commands = ()
-        self.navigation_status = 'disabled'
+        history_actions = mapped & {'undo', 'redo'}
+        commands = (next(iter(history_actions)),) if (len(history_actions) == 1 and not suppressed
+                    and not nav_suppressed and not active and not self.active
+                    and not wanted and state.navigation_allowed) else ()
+        self.navigation_status = 'ink history' if commands else 'disabled'
         self.active = bool(active)
         # 형광펜은 팔레트 색·굵기와 무관하게 고정 색(노랑)과 고정 굵기를 쓴다.
         if self.tool == 'highlighter':
