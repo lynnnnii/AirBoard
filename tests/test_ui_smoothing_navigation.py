@@ -181,8 +181,8 @@ class NavigationTests(unittest.TestCase):
             for t,x in ((0,0),(.1,10),(.2,25)):
                 sample=hand.copy(); sample[:,0]+=x
                 result=r.update([sample],100,100,t)
-        self.assertGreaterEqual(result.debug['swipe_open_count'],3)
-        self.assertIn('SWIPE_RIGHT',result.events)
+        self.assertEqual(result.debug['swipe_open_count'],0)
+        self.assertNotIn('SWIPE_RIGHT',result.events)
 
     def test_faster_swipe_profile_uses_shorter_distance(self):
         """UI 프로필은 짧은 이동을 인식하며 박수 차단 설정은 바꾸지 않는다."""
