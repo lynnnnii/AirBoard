@@ -91,6 +91,8 @@
     "clap_approach_drop": 0.3,
     "clap_ink_guard": 0.12,
     "fist_index_fold": 0.65,
+    "fist_min_folded": 5,
+    "fist_thumb_fold": 0.9,
     "fist_frames": 2,
     "clap_occlusion_close": 2.5,
     "clap_reacquire_seconds": 0.85,
@@ -103,7 +105,14 @@
     "pointer_keep_pinch": 0.2,
     "two_finger_curl": 1.45,
     "two_finger_fold": 0.9,
-    "swipe_reverse_guard": 1.0
+    "swipe_reverse_guard": 1.0,
+    "history_redo_min_folded_fingers": 0,
+    "history_min_folded_fingers": 4,
+    "history_thumb_reach": 0.9,
+    "history_thumb_x_min": 0.55,
+    "history_thumb_side_ratio": 1.5,
+    "history_thumb_straight": 0.85,
+    "history_gesture_cooldown": 0.55
   },
   "tracking": {
     "detection_confidence": 0.4

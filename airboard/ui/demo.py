@@ -167,6 +167,22 @@ class PDFRenderer:
         self._dirty = True
         self.checkpoint(force=True)
 
+    def undo(self) -> bool:
+        """현재 페이지의 마지막 획/지우개 작업을 취소한다."""
+        self.finish_stroke()
+        changed = self.board.undo()
+        self._dirty = True
+        self.checkpoint(force=True)
+        return changed
+
+    def redo(self) -> bool:
+        """취소한 마지막 획/지우개 작업을 다시 적용한다."""
+        self.finish_stroke()
+        changed = self.board.redo()
+        self._dirty = True
+        self.checkpoint(force=True)
+        return changed
+
     def close(self) -> None:
         """종료 직전 진행 중 필기와 페이지를 저장하고 자원을 닫는다."""
         try:
@@ -373,6 +389,13 @@ def main() -> None:
             packet = controller.update(state,now,
                                        suppressed=editing or calibration_points is not None or overlay.target is not None,
                                        navigation_suppressed=editing or calibration_points is not None or selected is not None)
+            for command in packet.commands:
+                if command in ('undo','redo'):
+                    if args.pdf:
+                        changed = renderer.undo() if command == 'undo' else renderer.redo()
+                        message = ('UNDO' if command == 'undo' else 'REDO') if changed else 'Nothing to restore'
+                    else:
+                        message = 'Undo/redo requires a PDF'
             slide = renderer.consume(packet)
             if trace_stream is not None:
                 record={'t':now, 'pose':trace_result.pose if trace_result else 'NONE',
@@ -423,6 +446,8 @@ def main() -> None:
                 names = list(settings.mapping)
                 if key in (up,down):
                     row = (row+(-1 if key==up else 1))%len(names)
+                    if 'draw' not in settings.mapping.values():
+                        message = 'SAVE BLOCKED: choose a held gesture and assign DRAW.'
                 elif key in (left,right):
                     # 이 제스처에 의미 있는 동작만 돌아가며 고른다. draw는 여러 제스처에 지정할 수 있다.
                     name = names[row]
@@ -430,18 +455,27 @@ def main() -> None:
                     current = settings.mapping[name]
                     i = choices.index(current) if current in choices else 0
                     settings.set_action(name, choices[(i+(-1 if key==left else 1))%len(choices)])
+                    message = (f'DRAW assigned to {name}; press ENTER to save'
+                               if settings.mapping[name] == 'draw' else
+                               'SAVE BLOCKED: choose a held gesture and assign DRAW.'
+                               if 'draw' not in settings.mapping.values() else '')
                 elif key==ord('r'):
                     from .settings import read_json
                     settings.mapping = read_json(ROOT/'config/gestures.json')
                     row = 0
-                    message = 'Default mapping restored; ENTER to save'
+                    message = 'Default mapping restored; press ENTER to save'
                 elif key in (10,13):
                     try:
                         settings.save()
                         editing = False
-                        message = ''
-                    except (ValueError,OSError) as exc:
-                        message = str(exc)
+                        message = 'Settings saved'
+                    except ValueError as exc:
+                        if 'draw' in str(exc).lower():
+                            message = 'SAVE BLOCKED: choose a held gesture and assign DRAW.'
+                        else:
+                            message = f'SAVE ERROR: {exc}'
+                    except OSError:
+                        message = 'SAVE ERROR: could not write config/ui-user.json'
                 elif key==27:
                     settings.mapping = backup.copy()
                     editing = False

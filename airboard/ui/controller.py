@@ -72,6 +72,10 @@ class UIController:
         nav_suppressed = suppressed if navigation_suppressed is None else navigation_suppressed
         actions = (mapped if not suppressed else
                    mapped & {'toggle_highlighter'} if not nav_suppressed else set())
+        history_action = next(iter(mapped & {'undo','redo'}), None)
+        if history_action:
+            actions = set()
+            self._draw_seen = float('-inf')
         # 'stop'(기본: 검지·중지 두 손가락)은 쓰는 중이라도 그 프레임에 바로 펜을 든다.
         # 아래 흔들림 유예로 이어 쓰지 않도록 마지막 쓰기 시각도 지운다.
         if 'stop' in actions:
@@ -83,6 +87,7 @@ class UIController:
             self._draw_seen = now
             self._draw_by_pinch = self.settings.mapping.get('PINCH') == 'draw' and 'PINCH' in state.gestures
         holding = ('draw' not in actions and self.active and self.tool in ('pen','highlighter')
+                   and not history_action
                    and not self._draw_by_pinch and state.position is not None and not suppressed
                    and not mapped & {'eraser','pointer'}
                    and now-self._draw_seen <= self.settings.ui.get('draw_grace_seconds',.2))
@@ -114,7 +119,7 @@ class UIController:
         if self.tool != previous_tool:
             self.notification,self.notice_until = self.tool,now+self.settings.ui['notification_seconds']
         pos = None if suppressed else self.calibration.transform(state.position)
-        active = pos is not None and wanted == self.temporary and not self.blocked and (self.tool=='eraser' or ('draw' in actions and self.tool in ('pen','highlighter')))
+        active = not history_action and pos is not None and wanted == self.temporary and not self.blocked and (self.tool=='eraser' or ('draw' in actions and self.tool in ('pen','highlighter')))
         if self.active and self.tool != previous_tool:
             active = False
         # 글씨 축소(펜만): 손 이동을 기준점에서 writing_scale배로 줄여 슬라이드에 작게 쓴다.
@@ -150,7 +155,11 @@ class UIController:
         phase ='move' if active and self.active else 'down' if active else 'up' if self.active else 'hover'
         # 손 제스처로 페이지를 넘기는 기능은 오작동 방지를 위해 비활성화한다.
         commands = ()
-        self.navigation_status = 'disabled'
+        if history_action:
+            commands = (history_action,)
+            self.navigation_status = 'history changed'
+        else:
+            self.navigation_status = 'disabled'
         self.active = bool(active)
         # 형광펜은 팔레트 색·굵기와 무관하게 고정 색(노랑)과 고정 굵기를 쓴다.
         if self.tool == 'highlighter':

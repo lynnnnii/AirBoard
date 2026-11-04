@@ -70,6 +70,7 @@ class ClapTests(unittest.TestCase):
     def test_clap_event_toggles_ui_without_page_command(self):
         r=GestureRecognizer(self.config)
         c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
+        c.settings.mapping['PINCH']='draw'  # Explicit legacy preset under test
         commands=[]
         with patch('airboard.gestures.gesture.classify_pose',return_value='FIST'):
             for t,hands in [(0,pair(4)),(.15,pair(2.6)),(.2,[hand(100)]),
@@ -100,6 +101,7 @@ class ClapTests(unittest.TestCase):
         """형광펜 전환 뒤 페이지 잠금과 별개로 새 필기를 허용한다."""
         r=GestureRecognizer(self.config)
         c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
+        c.settings.mapping['PINCH']='draw'  # Explicit legacy preset under test
         with patch('airboard.gestures.gesture.classify_pose',return_value='OPEN'),patch('airboard.gestures.gesture.pinch_ratio',return_value=.5):
             for t,gap in ((0,4),(.2,1.4),(.4,3.5),(.6,1.4)):
                 result=r.update(pair(gap),640,480,t)
@@ -155,6 +157,7 @@ class ClapTests(unittest.TestCase):
         """보호 시간 중 벌린 손을 기억해 형광펜 전환 후 재핀치를 요구하지 않는다."""
         r=GestureRecognizer(self.config)
         c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
+        c.settings.mapping['PINCH']='draw'  # Explicit legacy preset under test
         with patch('airboard.gestures.gesture.classify_pose',return_value='NONE'),patch('airboard.gestures.gesture.pinch_ratio',return_value=.7):
             for t,gap in ((0,4),(.2,1.4),(.4,3.5),(.6,1.4)):
                 result=r.update(pair(gap),640,480,t)
@@ -183,6 +186,7 @@ class ClapTests(unittest.TestCase):
         """직전 프레임이 필기여도 완료된 박수를 버리지 않고 획 종료 후 전환한다."""
         from airboard.ui.controller import InputState
         c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
+        c.settings.mapping['PINCH']='draw'  # Explicit legacy preset under test
         c.update(InputState((.5,.5),frozenset({'PINCH'})),0)
         packet=c.update(InputState((.5,.5),frozenset({'DOUBLE_CLAP'})),.1)
         self.assertEqual(packet.tool,'highlighter')
@@ -196,8 +200,10 @@ class ClapTests(unittest.TestCase):
         from airboard.ui.controller import InputState
         state=InputState((.2,.03),frozenset({'DOUBLE_CLAP'}))
         c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
+        c.settings.mapping['PINCH']='draw'  # Explicit legacy preset under test
         packet=c.update(state,0,suppressed=True,navigation_suppressed=False)
         self.assertEqual(packet.tool,'highlighter')
         self.assertFalse(packet.active)
         c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
+        c.settings.mapping['PINCH']='draw'  # Explicit legacy preset under test
         self.assertEqual(c.update(state,0,suppressed=True,navigation_suppressed=True).tool,'pen')

@@ -50,7 +50,8 @@ CFG = {
     #   주먹을 쥐면 손가락 끝이 손바닥 안쪽으로 들어와 이 값이 작아진다.
     #   (편 손가락 약 1.6 이상, 핀치할 때 검지 약 0.9~1.2, 주먹 약 0.3~0.7)
     "fold_tip": 0.8,         # 이보다 작으면 접힌 손가락
-    "fist_min_folded": 3,    # 검지 포함 네 손가락 중 이 개수 이상 접히면 주먹
+    "fist_min_folded": 5,    # 엄지를 포함한 다섯 손가락이 모두 접혀야 주먹
+    "fist_thumb_fold": 0.9,  # 엄지끝-손바닥 중심 거리가 손바닥 크기 대비 이 값 이하이면 접힘
     # 검지 뻗음: 검지끝이 검지MCP보다 손가락 방향(손목→중지MCP)으로 얼마나 나가 있는지 / 손바닥 크기
     #   주먹은 검지 끝이 손바닥 안으로 말려 MCP보다 손목 쪽에 있고 (0 이하),
     #   핀치(나머지 손가락 접음)는 검지가 C자라 끝이 MCP보다 바깥에 있다 (양수).
@@ -124,18 +125,41 @@ def index_reach(lm):
     return float(np.dot(lm[INDEX_TIP, :2] - lm[INDEX_MCP, :2], axis / s)) / s
 
 
-def classify_pose(lm, curls, tips=None):
+def classify_pose(lm, curls, tips=None, config=None):
     """한 손의 정적인 모양 분류 (핀치 여부는 PinchDetector가 따로 판단)."""
     tips = tip_to_palm(lm) if tips is None else tips
     folded = {k: v < CFG["fold_tip"] for k, v in tips.items()}
     extended = {k: v > CFG["curl_extended"] for k, v in curls.items()}
 
-    # 1) 주먹: 검지가 접혀 있고, 네 손가락 중 fist_min_folded개 이상 접힘.
-    #    MediaPipe는 주먹일 때 손가락 하나쯤은 덜 접힌 것으로 잡는 경우가 많아 4개 모두를 요구하지 않는다.
+    cfg = {**CFG, **(config or {})}
+    # Undo/redo needs a clearly extended, straight thumb pointed sideways.
+    thumb = lm[THUMB_TIP, :2] - lm[2, :2]
+    thumb_x, thumb_y = float(thumb[0]) / palm_size(lm), float(thumb[1]) / palm_size(lm)
+    thumb_reach = dist(lm[THUMB_TIP, :2], lm[INDEX_MCP, :2]) / palm_size(lm)
+    thumb_straight = dist(lm[2, :2], lm[THUMB_TIP, :2]) / (
+        dist(lm[2, :2], lm[3, :2]) + dist(lm[3, :2], lm[THUMB_TIP, :2]) + 1e-6)
+    # Redo is designed for the user's right hand: the thumb alone points right,
+    # since the curled fingers are naturally hidden from the camera in that pose.
+    # Undo keeps the curled-finger check to stay distinct from the eraser fist.
+    thumb_sideways = (thumb_reach > cfg.get('history_thumb_reach', .8)
+            and abs(thumb_x) > cfg.get('history_thumb_x_min', .5)
+            and abs(thumb_x) > cfg.get('history_thumb_side_ratio', 1.3) * abs(thumb_y)
+            and thumb_straight > cfg.get('history_thumb_straight', .85))
+    if (thumb_sideways and thumb_x > 0
+            and sum(folded.values()) >= cfg.get('history_redo_min_folded_fingers', 0)):
+        return "THUMB_RIGHT"
+    if (thumb_sideways and thumb_x < 0
+            and sum(folded.values()) >= cfg.get('history_min_folded_fingers', 3)):
+        return "THUMB_LEFT"
+
+    # 1) 주먹: 검지가 접혀 있고, 엄지를 포함해 fist_min_folded개 이상 접힘.
     #    주먹은 엄지·검지 끝도 가까워서 핀치보다 먼저 검사해야 한다.
     #    나머지 손가락을 접고 핀치하면 검지 끝도 손바닥 중심 가까이 오므로 접힘 조건만으로는 구분이 안 된다.
     #    그래서 검지 끝이 MCP보다 손바닥 안쪽으로 말려 들어갔는지(index_reach)를 추가로 본다.
-    if folded["index"] and sum(folded.values()) >= CFG["fist_min_folded"] \
+    thumb_tip_to_palm = dist(lm[THUMB_TIP, :2], palm_center(lm)) / palm_size(lm)
+    thumb_folded = thumb_tip_to_palm <= cfg.get("fist_thumb_fold", CFG["fist_thumb_fold"])
+    fist_folded_count = sum(folded.values()) + int(thumb_folded)
+    if folded["index"] and fist_folded_count >= cfg.get("fist_min_folded", CFG["fist_min_folded"]) \
             and index_reach(lm) < CFG["fist_index_reach"]:
         return "FIST"
     # 2) 포인터: 검지만 펴고 나머지 접힘 + 엄지와 검지가 떨어져 있음
@@ -341,6 +365,8 @@ class GestureRecognizer:
         self.fist_count = 0
         self._last_ink_point = None
         self._prev_pose = 'NONE'     # 직전 프레임 자세 (검지 자세 유지 판정용)
+        self._prev_history_pose = None
+        self._history_cooldown_until = float('-inf')
 
     def update(self, hands, frame_w, frame_h, t):
         """hands: HandTracker.detect() 결과 (손마다 (21,3) 픽셀 좌표). t: 초 단위 시각."""
@@ -359,6 +385,7 @@ class GestureRecognizer:
         if not hands:
             self.pinch.update(None)
             self._prev_pose = 'NONE'
+            self._prev_history_pose = None
             self._last_ink_point = None
             self.fist_count = 0
             self.swipe.update(None, False, frame_w, frame_h, t)
@@ -370,7 +397,14 @@ class GestureRecognizer:
         r.main_hand = lm
         curls = finger_curls(lm)
         tips = tip_to_palm(lm)
-        pose = classify_pose(lm, curls, tips)
+        pose = classify_pose(lm, curls, tips, self.config)
+        if pose in ('THUMB_LEFT', 'THUMB_RIGHT'):
+            if pose != self._prev_history_pose and t >= self._history_cooldown_until:
+                r.events.append(pose)
+                self._history_cooldown_until = t + self.config.get('history_gesture_cooldown', .55)
+            self._prev_history_pose = pose
+        else:
+            self._prev_history_pose = None
         ratio = pinch_ratio(lm)
         # 아래 두 판정은 UI가 매핑을 보고 켤 때만 쓴다. 핀치로 쓰는 기본 설정에서는 원래 판정과 똑같이 동작해야 한다.
         #  - index_writing: 검지로 쓰는 설정 (검지 자세 유지 + ✌️ 인식)

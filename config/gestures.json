@@ -3,5 +3,9 @@
   "DOUBLE_CLAP": "toggle_highlighter",
   "FIST": "eraser",
   "POINTER": "pointer",
-  "TWO_FINGERS": "stop"
+  "SWIPE_LEFT": "none",
+  "SWIPE_RIGHT": "none",
+  "TWO_FINGERS": "stop",
+  "THUMB_LEFT": "undo",
+  "THUMB_RIGHT": "redo"
 }
