@@ -47,6 +47,33 @@ class RenderTests(unittest.TestCase):
         np.testing.assert_array_equal(self.board.render_page(), bg)
         self.assertFalse(self.board.undo())
 
+    def test_undo_redo_history_and_new_stroke(self) -> None:
+        background = self.board.render_page()
+        self.stroke('pen', [(40, 40)])
+        first = self.board.render_page()
+        self.stroke('pen', [(80, 80)])
+        second = self.board.render_page()
+        self.assertTrue(self.board.undo())
+        np.testing.assert_array_equal(self.board.render_page(), first)
+        self.assertTrue(self.board.undo())
+        np.testing.assert_array_equal(self.board.render_page(), background)
+        self.assertTrue(self.board.redo())
+        np.testing.assert_array_equal(self.board.render_page(), first)
+        self.assertTrue(self.board.redo())
+        np.testing.assert_array_equal(self.board.render_page(), second)
+        self.assertFalse(self.board.redo())
+        self.assertTrue(self.board.undo())
+        self.stroke('pen', [(140, 100)])
+        self.assertFalse(self.board.redo())
+
+    def test_redo_is_per_page(self) -> None:
+        self.stroke('pen', [(40, 40)])
+        self.assertTrue(self.board.undo())
+        self.assertTrue(self.board.change_page(1))
+        self.assertFalse(self.board.redo())
+        self.assertTrue(self.board.change_page(-1))
+        self.assertTrue(self.board.redo())
+
     def test_highlighter_preview_does_not_accumulate(self) -> None:
         """동일 획의 중복 점/반복 렌더링은 형광펜을 더 진하게 하지 않는다."""
         bg = self.board.render_page()
