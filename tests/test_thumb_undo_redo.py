@@ -1,7 +1,7 @@
 """엄지척 좌우 제스처가 필기 Undo/Redo로만 연결되는지 검증한다."""
 import unittest
 import numpy as np
-from airboard.gestures.gesture import GestureRecognizer, ThumbSwipeDetector, is_thumb_up, sideways_thumb_pose
+from airboard.gestures.gesture import GestureRecognizer, ThumbSwipeDetector, is_thumb_up, sideways_thumb_pose, classify_pose, finger_curls, tip_to_palm
 from airboard.calibration import Calibration
 from airboard.ui.controller import UIController, InputState, from_gesture_result
 from airboard.ui.settings import Settings, allowed_actions
@@ -56,6 +56,19 @@ class ThumbGestureTests(unittest.TestCase):
             events.extend(result.events)
             self.assertFalse(result.pen_down)
         self.assertEqual(events, ['THUMB_LEFT'])
+
+    def test_fist_requires_all_five_fingers_folded(self):
+        # 손가락 끝이 손바닥 안쪽으로 들어오는 주먹을 만들고 엄지 상태만 바꾼다.
+        hand = thumb_hand()
+        hand[4, :2] = (130, 75)
+        self.assertEqual(classify_pose(hand, finger_curls(hand), tip_to_palm(hand)), 'FIST')
+        # 엄지만 세워도 지우개로 분류되면 안 된다.
+        hand[4, :2] = (110, 15)
+        self.assertNotEqual(classify_pose(hand, finger_curls(hand), tip_to_palm(hand)), 'FIST')
+        # 네 손가락 중 하나만 펴져도 다섯 손가락 주먹은 아니다.
+        hand[4, :2] = (130, 75)
+        hand[20, :2] = (150, 10)
+        self.assertNotEqual(classify_pose(hand, finger_curls(hand), tip_to_palm(hand)), 'FIST')
 
     def test_sideways_thumb_is_prioritized_over_fist(self):
         left = thumb_hand()
