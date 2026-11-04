@@ -103,7 +103,11 @@
     "pointer_keep_pinch": 0.2,
     "two_finger_curl": 1.45,
     "two_finger_fold": 0.9,
-    "swipe_reverse_guard": 1.0
+    "swipe_reverse_guard": 1.0,
+    "thumb_motion_distance": 0.13,
+    "thumb_motion_window": 0.65,
+    "thumb_motion_cooldown": 0.65,
+    "thumb_pose_frames": 3
   },
   "tracking": {
     "detection_confidence": 0.4
