@@ -293,7 +293,7 @@ class MappingRuleTests(unittest.TestCase):
             self.assertNotIn('page_next', allowed_actions(g))
             self.assertIn('draw', allowed_actions(g))
 
-    def test_draw_moves_to_one_gesture_and_is_required_to_save(self):
+    def test_multiple_draw_gestures_and_no_draw_can_be_saved(self):
         import shutil, tempfile
         from pathlib import Path
         from airboard.ui.settings import ROOT
@@ -305,12 +305,16 @@ class MappingRuleTests(unittest.TestCase):
             s = Settings(root)
             s.set_action('POINTER', 'draw')
             self.assertEqual(s.mapping['POINTER'], 'draw')
-            self.assertEqual(s.mapping['PINCH'], 'none')        # 원래 draw였던 핀치는 none으로
+            self.assertEqual(s.mapping['PINCH'], 'draw')        # 기존 draw 설정도 유지
             with self.assertRaises(ValueError):
                 s.set_action('DOUBLE_CLAP', 'eraser')           # 순간형에는 지우개를 연결할 수 없다
+            s.save()
+            self.assertEqual(Settings(root).mapping['POINTER'], 'draw')
+            self.assertEqual(Settings(root).mapping['PINCH'], 'draw')
             s.set_action('POINTER', 'none')
-            with self.assertRaisesRegex(ValueError, 'draw'):
-                s.save()                                        # 쓰기 제스처가 없으면 저장 안 됨
+            s.set_action('PINCH', 'none')
+            s.save()                                        # draw가 없어도 저장 가능
+            self.assertNotIn('draw', Settings(root).mapping.values())
 
     def test_old_personal_file_with_invalid_combos_is_repaired(self):
         import json, shutil, tempfile
@@ -326,7 +330,9 @@ class MappingRuleTests(unittest.TestCase):
             s = Settings(root)                                  # 오류 없이 열린다
             self.assertEqual(s.mapping['FIST'], 'eraser')       # 기본값으로
             self.assertEqual(s.mapping['DOUBLE_CLAP'], 'toggle_highlighter')
-            self.assertEqual(list(s.mapping.values()).count('draw'), 1)
+            self.assertEqual(list(s.mapping.values()).count('draw'), 2)
+            s.save()
+            self.assertEqual(list(Settings(root).mapping.values()).count('draw'), 2)
 
 
 if __name__ == '__main__':
