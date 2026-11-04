@@ -110,6 +110,19 @@ class NavigationTests(unittest.TestCase):
         result.pose='OPEN'
         self.assertEqual(c.update(from_gesture_result(result,(100,100)),2).commands,('page_next',))
 
+    def test_vertical_swipes_map_to_undo_redo(self):
+        d = SwipeDetector({'swipe_vertical_dist': .16})
+        self.assertIsNone(d.update((50, 15), True, 100, 100, 0))
+        self.assertIsNone(d.update((50, 30), True, 100, 100, .1))
+        self.assertEqual(d.update((50, 50), True, 100, 100, .2), 'SWIPE_DOWN')
+        c = self.controller()
+        self.assertEqual(c.update(InputState((.5, .5), frozenset({'SWIPE_UP'})), 0).commands, ('undo',))
+        self.assertEqual(c.update(InputState((.5, .5), frozenset({'SWIPE_DOWN'})), 1).commands, ('redo',))
+        d = SwipeDetector({'swipe_vertical_dist': .16})
+        for t, y in ((0, 90), (.1, 70)):
+            self.assertIsNone(d.update((50, y), True, 100, 100, t))
+        self.assertEqual(d.update((50, 45), True, 100, 100, .2), 'SWIPE_UP')
+
     def test_swipe_does_not_reuse_tool_movement(self):
         """이전 펼친 손과 도구 동작의 이동을 이어 스와이프로 판정하지 않는다."""
         detector=SwipeDetector()
