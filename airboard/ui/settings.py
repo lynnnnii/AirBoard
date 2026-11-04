@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-ACTIONS = ('draw','stop','toggle_highlighter','eraser','pointer','page_next','page_prev','none')
+ACTIONS = ('draw','stop','toggle_highlighter','eraser','pointer','none')
 
 # 제스처 종류별로 의미 있는 동작만 고를 수 있다.
 #  - 순간형(한 프레임짜리 이벤트): 쓰기·지우기·포인터처럼 '하는 동안' 동작은 한 프레임만 켜져 의미가 없다.
@@ -55,7 +55,7 @@ class Settings:
 
         """
         for g,a in list(self.mapping.items()):
-            if a in ACTIONS and a not in allowed_actions(g):
+            if a not in allowed_actions(g):
                 fallback = defaults.get(g,'none')
                 self.mapping[g] = fallback if fallback in allowed_actions(g) else 'none'
 
