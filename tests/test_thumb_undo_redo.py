@@ -1,7 +1,7 @@
 """엄지척 좌우 제스처가 필기 Undo/Redo로만 연결되는지 검증한다."""
 import unittest
 import numpy as np
-from airboard.gestures.gesture import GestureRecognizer, ThumbSwipeDetector, is_thumb_up
+from airboard.gestures.gesture import GestureRecognizer, ThumbSwipeDetector, is_thumb_up, sideways_thumb_pose
 from airboard.calibration import Calibration
 from airboard.ui.controller import UIController, InputState, from_gesture_result
 from airboard.ui.settings import Settings, allowed_actions
@@ -56,6 +56,35 @@ class ThumbGestureTests(unittest.TestCase):
             events.extend(result.events)
             self.assertFalse(result.pen_down)
         self.assertEqual(events, ['THUMB_LEFT'])
+
+    def test_sideways_thumb_is_prioritized_over_fist(self):
+        left = thumb_hand()
+        left[4, :2] = (65, 65)
+        left[3, :2] = (92, 62)
+        right = thumb_hand()
+        right[4, :2] = (220, 65)
+        right[3, :2] = (180, 62)
+        self.assertEqual(sideways_thumb_pose(left), 'THUMB_LEFT')
+        self.assertEqual(sideways_thumb_pose(right), 'THUMB_RIGHT')
+        recognizer = GestureRecognizer({'history_hold_frames': 2})
+        events = []
+        for t in (0, .1, .2, .3):
+            result = recognizer.update([left], 640, 480, t)
+            events.extend(result.events)
+            self.assertNotEqual(result.pose, 'FIST')
+            self.assertFalse(result.pen_down)
+        self.assertEqual(events, ['THUMB_LEFT'])
+        # 자세를 유지하는 동안 재입력하지 않는다.
+        self.assertEqual(recognizer.update([left], 640, 480, .4).events, [])
+
+    def test_eraser_recently_used_blocks_accidental_undo(self):
+        settings = Settings()
+        controller = UIController(Calibration([[0, 0], [1, 0], [1, 1], [0, 1]], (100, 100)), settings)
+        controller.update(InputState((.5, .5), frozenset({'FIST'})), 0)
+        controller.update(InputState((.5, .5), frozenset({'FIST'})), .1)
+        controller.update(InputState((.5, .5)), .2)
+        self.assertEqual(controller.update(InputState((.5, .5), frozenset({'THUMB_LEFT'})), .3).commands, ())
+        self.assertEqual(controller.update(InputState((.5, .5), frozenset({'THUMB_LEFT'})), 1.0).commands, ('undo',))
 
     def test_maps_to_ink_history_not_pages(self):
         settings = Settings()
