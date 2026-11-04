@@ -81,7 +81,7 @@ class StateTests(unittest.TestCase):
         self.frame('PINCH')
         self.assertEqual(self.frame('PINCH','SWIPE_RIGHT').commands,())
         self.frame()
-        self.assertEqual(self.frame('SWIPE_RIGHT',now=2.).commands,('page_next',))
+        self.assertEqual(self.frame('SWIPE_RIGHT',now=2.).commands,())
         self.assertEqual(self.frame().commands,())
 
     def test_pointer_and_suppression(self) -> None:

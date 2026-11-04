@@ -373,8 +373,6 @@ def main() -> None:
             packet = controller.update(state,now,
                                        suppressed=editing or calibration_points is not None or overlay.target is not None,
                                        navigation_suppressed=editing or calibration_points is not None or selected is not None)
-            for command in packet.commands:
-                message = move_page(1 if command=='page_next' else -1)
             slide = renderer.consume(packet)
             if trace_stream is not None:
                 record={'t':now, 'pose':trace_result.pose if trace_result else 'NONE',

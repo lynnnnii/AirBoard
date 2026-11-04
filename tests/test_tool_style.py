@@ -127,11 +127,11 @@ class CustomMappingTests(unittest.TestCase):
         settings.mapping.update(mapping)
         return UIController(Calibration([[0, 0], [1, 0], [1, 1], [0, 1]], (100, 100)), settings)
 
-    def test_clap_mapped_to_page_turns_page_with_two_hands(self):
+    def test_legacy_clap_page_mapping_never_turns_page(self):
         c = self.controller(DOUBLE_CLAP='page_next')
         c.update(InputState((.5, .5), navigation_allowed=False), 0)
         p = c.update(InputState((.5, .5), frozenset({'DOUBLE_CLAP'}), navigation_allowed=False), .1)
-        self.assertEqual(p.commands, ('page_next',))
+        self.assertEqual(p.commands, ())
         self.assertEqual(c.update(InputState(None, frozenset({'DOUBLE_CLAP'}), navigation_allowed=False), .2).commands, ())  # 재입력 대기
 
     def test_clap_page_is_ignored_while_writing(self):
@@ -270,12 +270,12 @@ class SettingsSaveTests(unittest.TestCase):
             for name in ('default.json', 'gestures.json'):
                 shutil.copy(ROOT / 'config' / name, root / 'config' / name)
             s = Settings(root)
-            s.mapping['DOUBLE_CLAP'] = 'page_next'
+            s.mapping['DOUBLE_CLAP'] = 'none'
             s.ui['dwell_seconds'] = 1.
             s.save()
             saved = json.loads((root / 'config/ui-user.json').read_text(encoding='utf-8'))
             self.assertEqual(saved['ui'], {'dwell_seconds': 1.})
-            self.assertEqual(saved['mapping']['DOUBLE_CLAP'], 'page_next')
+            self.assertEqual(saved['mapping']['DOUBLE_CLAP'], 'none')
             default = json.loads((root / 'config/default.json').read_text(encoding='utf-8'))
             default['ui']['writing_scale'] = .8                # 나중에 팀 기본값을 바꾸면
             (root / 'config/default.json').write_text(json.dumps(default), encoding='utf-8')
@@ -288,7 +288,7 @@ class MappingRuleTests(unittest.TestCase):
     def test_one_shot_and_held_gestures_offer_only_meaningful_actions(self):
         from airboard.ui.settings import allowed_actions
         for g in ('DOUBLE_CLAP', 'SWIPE_LEFT', 'SWIPE_RIGHT'):
-            self.assertEqual(set(allowed_actions(g)), {'toggle_highlighter', 'page_next', 'page_prev', 'none'})
+            self.assertEqual(set(allowed_actions(g)), {'toggle_highlighter', 'none'})
         for g in ('PINCH', 'FIST', 'POINTER', 'TWO_FINGERS'):
             self.assertNotIn('page_next', allowed_actions(g))
             self.assertIn('draw', allowed_actions(g))

@@ -437,19 +437,9 @@ class GestureRecognizer:
         r.pointer_point = tuple(lm[INDEX_TIP, :2].astype(int)) if pose != "FIST" \
             else tuple(palm_center(lm).astype(int))
 
-        # 양손이 보이면(박수 중일 수 있음) 스와이프도 막는다. 박수 때 손 위치가 튀면서 스와이프로 오인되는 것 방지
-        n_open = sum(curls[name] > CFG['swipe_open_curl'] or
-                     dist(lm[WRIST,:2],lm[tip,:2]) > 1.08*dist(lm[WRIST,:2],lm[tip-2,:2])
-                     for name,(_,tip) in FINGERS.items())
-        swipe_ok = (not clap_busy and len(hands) == 1 and pose not in ("PINCH", "FIST", "POINTER", "TWO_FINGERS")
-                    and n_open >= CFG["swipe_open_fingers"])
-        sw = self.swipe.update(palm_center(lm) if not clap_busy and len(hands) == 1 and pose not in ('PINCH','FIST','POINTER','TWO_FINGERS') else None,
-                               swipe_ok, frame_w, frame_h, t)
-        if sw:
-            r.events.append(sw)
-
+        # 페이지 이동 제스처 제거: 손을 움직여도 스와이프 이벤트를 발생시키지 않는다.
         r.debug = {"hand_count": len(hands),
-                   "swipe_open_count": n_open,
+                   "swipe_open_count": 0,
                    "clap_ink_blocked": ink_busy,
                    "clap_navigation_blocked": clap_busy,
                    "pinch_armed": self.pinch.armed,

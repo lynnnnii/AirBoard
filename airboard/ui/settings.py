@@ -4,13 +4,13 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-ACTIONS = ('draw','stop','toggle_highlighter','eraser','pointer','page_next','page_prev','none')
+ACTIONS = ('draw','stop','toggle_highlighter','eraser','pointer','none')
 
 # 제스처 종류별로 의미 있는 동작만 고를 수 있다.
 #  - 순간형(한 프레임짜리 이벤트): 쓰기·지우기·포인터처럼 '하는 동안' 동작은 한 프레임만 켜져 의미가 없다.
 #  - 유지형(그 모양을 하는 동안 계속): 페이지 넘기기는 쓰기·지우기와 헷갈려 실수로 넘어가기 쉬워 뺀다.
 ONE_SHOT_GESTURES = ('DOUBLE_CLAP','SWIPE_LEFT','SWIPE_RIGHT','SWIPE_UP','SWIPE_DOWN')
-ONE_SHOT_ACTIONS = ('toggle_highlighter','page_next','page_prev','none')
+ONE_SHOT_ACTIONS = ('toggle_highlighter','none')
 HELD_ACTIONS = ('draw','stop','toggle_highlighter','eraser','pointer','none')
 
 
@@ -51,11 +51,9 @@ class Settings:
         self.validate()
 
     def _repair_mapping(self, defaults: dict) -> None:
-        """예전에 저장한 개인 매핑에 지금은 고를 수 없는 조합이 있으면 기본값(안 되면 none)으로 바꾼다.
-
-        """
+        """예전 개인 설정의 페이지 이동 등 지원하지 않는 동작을 none/기본값으로 복구한다."""
         for g,a in list(self.mapping.items()):
-            if a in ACTIONS and a not in allowed_actions(g):
+            if a not in allowed_actions(g):
                 fallback = defaults.get(g,'none')
                 self.mapping[g] = fallback if fallback in allowed_actions(g) else 'none'
 

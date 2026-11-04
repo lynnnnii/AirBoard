@@ -148,41 +148,9 @@ class UIController:
         if active:
             self._last_pos = pos
         phase ='move' if active and self.active else 'down' if active else 'up' if self.active else 'hover'
-        quiet = self.settings.ui.get('navigation_quiet_seconds', .15)
-        unsafe = (nav_suppressed or active or self.active or wanted or toggle
-                  or not state.navigation_allowed or 'draw' in mapped)
-        page_actions = mapped & {'page_next','page_prev'}
+        # 손 제스처로 페이지를 넘기는 기능은 오작동 방지를 위해 비활성화한다.
         commands = ()
-        # 박수는 두 손으로 하는 단발 제스처라 '한 손일 때만 페이지 이동' 조건을 통과할 수 없다.
-        # 설정에서 박수를 페이지 이동에 연결했다면 쓰는 중이 아닐 때 그 프레임에 바로 넘긴다.
-        clap_pages = ({self.settings.mapping.get('DOUBLE_CLAP')} & {'page_next','page_prev'}
-                      if 'DOUBLE_CLAP' in state.gestures and not nav_suppressed else set())
-        if clap_pages and not (active or self.active or wanted) and now >= self._clap_page_until:
-            commands = (clap_pages.pop(),)
-            self._pending_page = None
-            self._clap_page_until = self._page_blocked_until = now + self.settings.ui.get('navigation_cooldown_seconds', .8)
-            self.navigation_status = 'page moved'
-        elif unsafe:
-            self._page_blocked_until = now + quiet
-            self._pending_page = None
-            self.navigation_status = ('settings/palette' if nav_suppressed else
-                                      'writing/tool' if active or self.active or wanted or toggle or 'draw' in mapped
-                                      else 'need one open hand')
-        else:
-            if len(page_actions)>1:
-                self._pending_page = None
-            elif len(page_actions)==1:
-                # 모드 해제 직후 단발 이벤트가 발생하면 짧게 보관한다.
-                if self._page_blocked_until-now <= quiet:
-                    self._pending_page = (next(iter(page_actions)), now + .35)
-            if self._pending_page is not None and now>self._pending_page[1]:
-                self._pending_page = None
-            if self._pending_page is not None and now>=self._page_blocked_until:
-                commands = (self._pending_page[0],)
-                self._pending_page = None
-                self._page_blocked_until = now + self.settings.ui.get('navigation_cooldown_seconds', .8)
-            self.navigation_status = ('page moved' if commands else 'waiting' if self._pending_page
-                                      else 'cooldown' if now<self._page_blocked_until else 'ready')
+        self.navigation_status = 'disabled'
         self.active = bool(active)
         # 형광펜은 팔레트 색·굵기와 무관하게 고정 색(노랑)과 고정 굵기를 쓴다.
         if self.tool == 'highlighter':
