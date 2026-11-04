@@ -309,7 +309,7 @@ class SwipeDetector:
                 "SWIPE_DOWN" if dy > 0 else "SWIPE_UP")
             # 스와이프 뒤 손을 제자리로 되돌리는 동작이 반대 방향 스와이프로 잡히지 않게,
             # swipe_reverse_guard 초 동안은 반대 방향을 무시한다 (같은 방향 연속 스와이프는 그대로 허용).
-            if (self._last_swipe is not None and event != self._last_swipe[0]
+            if (self._last_swipe is not None and {event, self._last_swipe[0]} == {'SWIPE_LEFT', 'SWIPE_RIGHT'}
                     and t - self._last_swipe[1] < self.config.get('swipe_reverse_guard', 0.)):
                 return None
             self.cooldown_until = t + self.config["swipe_cooldown"]
