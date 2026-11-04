@@ -153,6 +153,22 @@ class PDFRenderer:
             self._dirty = False
             self._last_save = time.monotonic()
 
+    def undo(self) -> bool:
+        self.finish_stroke()
+        changed = self.board.undo()
+        if changed:
+            self._dirty = True
+            self.checkpoint(force=True)
+        return changed
+
+    def redo(self) -> bool:
+        self.finish_stroke()
+        changed = self.board.redo()
+        if changed:
+            self._dirty = True
+            self.checkpoint(force=True)
+        return changed
+
     def change_page(self, offset: int) -> None:
         """페이지 변경과 직전 필기를 저장한다."""
         self.finish_stroke()
@@ -374,6 +390,11 @@ def main() -> None:
                                        suppressed=editing or calibration_points is not None or overlay.target is not None,
                                        navigation_suppressed=editing or calibration_points is not None or selected is not None)
             slide = renderer.consume(packet)
+            for command in packet.commands:
+                if args.pdf and command in ('undo', 'redo'):
+                    changed = renderer.undo() if command == 'undo' else renderer.redo()
+                    message = command.upper() if changed else command.upper() + ': no history'
+                    slide = renderer.board.render_page()
             if trace_stream is not None:
                 record={'t':now, 'pose':trace_result.pose if trace_result else 'NONE',
                         'hands':len(trace_result.hands) if trace_result else 0,
@@ -463,6 +484,10 @@ def main() -> None:
             elif key==ord('s'):
                 backup = settings.mapping.copy()
                 editing,row = True,0
+            elif key in (ord('z'), ord('y')) and args.pdf:
+                changed = renderer.undo() if key == ord('z') else renderer.redo()
+                label = 'UNDO' if key == ord('z') else 'REDO'
+                message = label if changed else label + ': no history'
             elif key in (left,right):
                 message = move_page(-1 if key==left else 1)
             elif key in (ord('['),ord(']')):
