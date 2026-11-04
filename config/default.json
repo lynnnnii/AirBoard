@@ -91,6 +91,8 @@
     "clap_approach_drop": 0.3,
     "clap_ink_guard": 0.12,
     "fist_index_fold": 0.65,
+    "fist_min_folded": 5,
+    "fist_thumb_fold": 0.9,
     "fist_frames": 2,
     "clap_occlusion_close": 2.5,
     "clap_reacquire_seconds": 0.85,

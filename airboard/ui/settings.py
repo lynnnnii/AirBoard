@@ -12,10 +12,13 @@ ACTIONS = ('draw','stop','toggle_highlighter','eraser','pointer','undo','redo','
 ONE_SHOT_GESTURES = ('DOUBLE_CLAP','SWIPE_LEFT','SWIPE_RIGHT','SWIPE_UP','SWIPE_DOWN','THUMB_LEFT','THUMB_RIGHT')
 ONE_SHOT_ACTIONS = ('toggle_highlighter','undo','redo','page_next','page_prev','none')
 HELD_ACTIONS = ('draw','stop','toggle_highlighter','eraser','pointer','none')
+DISABLED_GESTURES = ('SWIPE_LEFT','SWIPE_RIGHT','SWIPE_UP','SWIPE_DOWN')
 
 
 def allowed_actions(gesture: str) -> tuple[str,...]:
     """이 제스처에 연결할 수 있는 동작 목록 (설정 화면에서 이 안에서만 고른다)."""
+    if gesture in DISABLED_GESTURES:
+        return ('none',)
     return ONE_SHOT_ACTIONS if gesture in ONE_SHOT_GESTURES else HELD_ACTIONS
 
 

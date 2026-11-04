@@ -62,14 +62,32 @@ class Overlay:
     def draw(self, image: object, packet: RenderPacket, notice: str = '') -> None:
         """전달받은 이미지를 수정; 창 생성/입력 처리는 호출자가 담당."""
         for a,b,c,d,k,v in self.cells:
-            cv2.rectangle(image,(a,b),(c,d),bgr(v) if k=='color' else (35,35,35),-1)
-            if k=='width':
-                text = str(v)
-                (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, .95, 2)
-                cv2.putText(image,text,(a+(c-a-tw)//2,b+(d-b+th)//2),
-                            cv2.FONT_HERSHEY_SIMPLEX,.95,(255,255,255),2,cv2.LINE_AA)
+            if k == 'width':
+                # 굵기 선택 칸만 4배로 그린 뒤 축소해 가장자리를 부드럽게 한다.
+                scale = 4
+                cell_w,cell_h = c-a+1,d-b+1
+                tile = np.full((cell_h*scale,cell_w*scale,3),(35,35,35),np.uint8)
+                widths = self.settings.ui['widths']
+                size_index = widths.index(v)
+                sample_width = 2 + 2 * size_index
+                y = (cell_h//2)*scale
+                curve = np.array([
+                    (8*scale,y+5*scale), (14*scale,y+5*scale), (17*scale,y-4*scale),
+                    (21*scale,y-6*scale), (25*scale,y+scale), (29*scale,y+5*scale),
+                    (34*scale,y+3*scale), (40*scale,y-4*scale), ((cell_w-8)*scale,y-8*scale)
+                ],dtype=np.int32)
+                thickness = sample_width*scale
+                cv2.polylines(tile,[curve],False,(255,255,255),thickness,cv2.LINE_AA)
+                radius = max(1,thickness//2)
+                cv2.circle(tile,tuple(curve[0]),radius,(255,255,255),-1,cv2.LINE_AA)
+                cv2.circle(tile,tuple(curve[-1]),radius,(255,255,255),-1,cv2.LINE_AA)
                 if v == packet.width:
-                    cv2.rectangle(image,(a,b),(c,d),(255,255,255),2)
+                    cv2.rectangle(tile,(0,0),(cell_w*scale-1,cell_h*scale-1),(255,255,255),2*scale,cv2.LINE_AA)
+                if (k,v)==self.target:
+                    cv2.rectangle(tile,(0,0),(cell_w*scale-1,cell_h*scale-1),(0,220,255),2*scale,cv2.LINE_AA)
+                image[b:d+1,a:c+1] = cv2.resize(tile,(cell_w,cell_h),interpolation=cv2.INTER_AREA)
+                continue
+            cv2.rectangle(image,(a,b),(c,d),bgr(v) if k=='color' else (35,35,35),-1)
             if (k,v)==self.target:
                 cv2.rectangle(image,(a,b),(c,d),(0,220,255),2)
         if packet.position:
