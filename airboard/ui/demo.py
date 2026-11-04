@@ -153,6 +153,22 @@ class PDFRenderer:
             self._dirty = False
             self._last_save = time.monotonic()
 
+    def undo(self) -> bool:
+        self.finish_stroke()
+        changed = self.board.undo()
+        if changed:
+            self._dirty = True
+            self.checkpoint(force=True)
+        return changed
+
+    def redo(self) -> bool:
+        self.finish_stroke()
+        changed = self.board.redo()
+        if changed:
+            self._dirty = True
+            self.checkpoint(force=True)
+        return changed
+
     def change_page(self, offset: int) -> None:
         """페이지 변경과 직전 필기를 저장한다."""
         self.finish_stroke()
@@ -374,7 +390,11 @@ def main() -> None:
                                        suppressed=editing or calibration_points is not None or overlay.target is not None,
                                        navigation_suppressed=editing or calibration_points is not None or selected is not None)
             for command in packet.commands:
-                message = move_page(1 if command=='page_next' else -1)
+                if command in ('page_next', 'page_prev'):
+                    message = move_page(1 if command == 'page_next' else -1)
+                elif command in ('undo', 'redo'):
+                    changed = (renderer.undo() if command == 'undo' else renderer.redo()) if args.pdf else False
+                    message = (command.upper() if changed else command.upper() + ': no history')
             slide = renderer.consume(packet)
             if trace_stream is not None:
                 record={'t':now, 'pose':trace_result.pose if trace_result else 'NONE',
