@@ -151,6 +151,67 @@ def classify_pose(lm, curls, tips=None):
 # ---------------------------------------------------------------------------
 # 상태 판정기들
 # ---------------------------------------------------------------------------
+def is_thumb_up(lm, config=None):
+    """엄지만 손바닥 축을 따라 뻗고 나머지 손가락은 접힌 상태인지 판정한다."""
+    cfg = config or CFG
+    center = palm_center(lm)
+    scale = palm_size(lm)
+    axis = (lm[MIDDLE_MCP, :2] - lm[WRIST, :2]) / scale
+    thumb_vector = lm[THUMB_TIP, :2] - lm[2, :2]
+    thumb_forward = float(np.dot(thumb_vector, axis)) / scale
+    thumb_reach = dist(lm[THUMB_TIP, :2], center) / scale
+    thumb_extended = (thumb_forward > cfg.get('thumb_forward_min', .42)
+                      and thumb_reach > cfg.get('thumb_reach_min', 1.05))
+    tip_ratios = tip_to_palm(lm)
+    folded_count = sum(tip_ratios[name] < cfg.get('thumb_fold_max', .95)
+                       for name in ('index', 'middle', 'ring', 'pinky'))
+    return thumb_extended and folded_count >= 3
+
+
+class ThumbSwipeDetector:
+    """엄지척 자세를 유지한 한 손의 좌/우 이동을 한 번의 명령으로 변환한다."""
+
+    def __init__(self, config=None):
+        self.config = {**CFG, **(config or {})}
+        self.history = deque()
+        self.pose_frames = 0
+        self.missing_frames = 0
+        self.triggered = False
+        self.cooldown_until = 0.
+
+    def reset(self):
+        self.history.clear()
+        self.pose_frames = 0
+        self.missing_frames = 0
+        self.triggered = False
+
+    def update(self, point, thumb_up, frame_w, frame_h, t):
+        if not thumb_up or point is None:
+            self.missing_frames += 1
+            if self.missing_frames >= 2:
+                self.reset()
+            return None
+        self.missing_frames = 0
+        if self.triggered or t < self.cooldown_until:
+            return None
+        self.pose_frames += 1
+        self.history.append((t, float(point[0]) / frame_w, float(point[1]) / frame_h))
+        window = self.config.get('thumb_motion_window', .65)
+        while self.history and t - self.history[0][0] > window:
+            self.history.popleft()
+        if self.pose_frames < self.config.get('thumb_pose_frames', 3) or len(self.history) < 3:
+            return None
+        dx = self.history[-1][1] - self.history[0][1]
+        dy = self.history[-1][2] - self.history[0][2]
+        if (abs(dx) >= self.config.get('thumb_motion_distance', .13)
+                and abs(dy) < abs(dx) * .8):
+            self.triggered = True  # 자세를 풀었다가 다시 엄지척해야 다음 명령
+            self.cooldown_until = t + self.config.get('thumb_motion_cooldown', .65)
+            self.history.clear()
+            return 'THUMB_RIGHT' if dx > 0 else 'THUMB_LEFT'
+        return None
+
+
 class PinchDetector:
     """히스테리시스 + 프레임 디바운스로 Pen Down / Pen Up 판정."""
 
@@ -324,7 +385,7 @@ class GestureResult:
     pen_down: bool = False                       # True = 쓰는 중 (화면에는 WRITE ON으로 표시)
     pen_point: tuple = None                      # 필기 좌표 (엄지끝과 검지끝의 중간점)
     pointer_point: tuple = None                  # 검지 끝 좌표 (포인터·지우개 위치)
-    events: list = field(default_factory=list)   # DOUBLE_CLAP, SWIPE_LEFT, SWIPE_RIGHT
+    events: list = field(default_factory=list)   # DOUBLE_CLAP, THUMB_LEFT, THUMB_RIGHT
     debug: dict = field(default_factory=dict)    # 튜닝용 수치 (핀치 비율, 굽힘 비율 등)
 
 
@@ -338,6 +399,7 @@ class GestureRecognizer:
         self._swipe_blocked_until = 0.
         self._ink_blocked_until = 0.
         self.swipe = SwipeDetector(config)
+        self.thumb_swipe = ThumbSwipeDetector(config)
         self.fist_count = 0
         self._last_ink_point = None
         self._prev_pose = 'NONE'     # 직전 프레임 자세 (검지 자세 유지 판정용)
@@ -362,6 +424,7 @@ class GestureRecognizer:
             self._last_ink_point = None
             self.fist_count = 0
             self.swipe.update(None, False, frame_w, frame_h, t)
+            self.thumb_swipe.update(None, False, frame_w, frame_h, t)
             r.debug = {"hand_count": 0, "clap_touch": self.clap.touching, "clap_count": len(self.clap.claps)}
             return r
 
@@ -372,6 +435,14 @@ class GestureRecognizer:
         tips = tip_to_palm(lm)
         pose = classify_pose(lm, curls, tips)
         ratio = pinch_ratio(lm)
+        thumb_pose = (len(hands) == 1 and not clap_busy
+                      and is_thumb_up(lm, self.config))
+        thumb_event = self.thumb_swipe.update(
+            palm_center(lm) if thumb_pose else None, thumb_pose, frame_w, frame_h, t)
+        if thumb_event:
+            r.events.append(thumb_event)
+        if thumb_pose:
+            pose = 'NONE'   # 주먹 지우개·포인터로 잘못 분류되지 않게 한다.
         # 아래 두 판정은 UI가 매핑을 보고 켤 때만 쓴다. 핀치로 쓰는 기본 설정에서는 원래 판정과 똑같이 동작해야 한다.
         #  - index_writing: 검지로 쓰는 설정 (검지 자세 유지 + ✌️ 인식)
         #  - two_fingers: ✌️를 다른 동작에 연결한 설정 (✌️ 인식만)
@@ -411,10 +482,12 @@ class GestureRecognizer:
 
         # 양손이 보이면(박수 중일 수 있음) 필기를 막는다
         r.pen_down = self.pinch.update(
-            ratio, blocked=(pose == "FIST" or ink_busy or (fist_candidate and not self.pinch.down)),
+            ratio, blocked=(pose == "FIST" or thumb_pose or ink_busy or (fist_candidate and not self.pinch.down)),
             observe_release=(ink_busy and len(hands)==1 and not fist_candidate))
         if r.pen_down:
             pose = "PINCH"
+        if thumb_pose:
+            pose = "NONE"
         if ink_busy:
             pose = 'NONE'
         r.pose = pose
