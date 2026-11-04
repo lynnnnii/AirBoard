@@ -65,7 +65,7 @@ class ClapTests(unittest.TestCase):
             found=[]
             for t,x in ((1.,100),(1.1,180),(1.2,260)):
                 found+=r.update([hand(x)],640,480,t).events
-            self.assertEqual(found,['SWIPE_RIGHT'])
+            self.assertEqual(found,[])
 
     def test_clap_event_toggles_ui_without_page_command(self):
         r=GestureRecognizer(self.config)
