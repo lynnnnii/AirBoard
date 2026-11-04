@@ -151,11 +151,11 @@ class UIController:
         quiet = self.settings.ui.get('navigation_quiet_seconds', .15)
         unsafe = (nav_suppressed or active or self.active or wanted or toggle
                   or not state.navigation_allowed or 'draw' in mapped)
-        page_actions = mapped & {'page_next','page_prev'}
+        page_actions = mapped & {'page_next','page_prev','undo','redo'}
         commands = ()
         # 박수는 두 손으로 하는 단발 제스처라 '한 손일 때만 페이지 이동' 조건을 통과할 수 없다.
         # 설정에서 박수를 페이지 이동에 연결했다면 쓰는 중이 아닐 때 그 프레임에 바로 넘긴다.
-        clap_pages = ({self.settings.mapping.get('DOUBLE_CLAP')} & {'page_next','page_prev'}
+        clap_pages = ({self.settings.mapping.get('DOUBLE_CLAP')} & {'page_next','page_prev','undo','redo'}
                       if 'DOUBLE_CLAP' in state.gestures and not nav_suppressed else set())
         if clap_pages and not (active or self.active or wanted) and now >= self._clap_page_until:
             commands = (clap_pages.pop(),)
