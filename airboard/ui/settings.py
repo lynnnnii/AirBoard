@@ -53,32 +53,22 @@ class Settings:
     def _repair_mapping(self, defaults: dict) -> None:
         """예전에 저장한 개인 매핑에 지금은 고를 수 없는 조합이 있으면 기본값(안 되면 none)으로 바꾼다.
 
-        draw가 여러 제스처에 있으면 첫 번째만 남긴다. 그래도 프로그램이 멈추지 않고 열리게 하기 위함이다.
         """
         for g,a in list(self.mapping.items()):
             if a in ACTIONS and a not in allowed_actions(g):
                 fallback = defaults.get(g,'none')
                 self.mapping[g] = fallback if fallback in allowed_actions(g) else 'none'
-        drawing = [g for g,a in self.mapping.items() if a=='draw']
-        for g in drawing[1:]:
-            self.mapping[g] = 'none'
 
     def set_action(self, gesture: str, action: str) -> None:
-        """제스처에 동작을 연결한다. draw는 한 제스처에만 둘 수 있어 다른 draw는 none이 된다."""
+        """제스처에 동작을 연결한다. draw는 여러 제스처에 지정할 수도 있다."""
         if action not in allowed_actions(gesture):
             raise ValueError(f'{gesture}에는 {action}을 연결할 수 없습니다.')
-        if action == 'draw':
-            for g,a in self.mapping.items():
-                if a == 'draw' and g != gesture:
-                    self.mapping[g] = 'none'
         self.mapping[gesture] = action
 
     def validate(self) -> None:
         """실행 가능한 값만 허용한다."""
         if not isinstance(self.mapping,dict) or not self.mapping or any(not isinstance(k,str) or not k or v not in allowed_actions(k) for k,v in self.mapping.items()):
             raise ValueError('잘못된 제스처 매핑')
-        if list(self.mapping.values()).count('draw') > 1:
-            raise ValueError('draw는 한 제스처에만 연결할 수 있습니다.')
         if not self.ui['colors'] or any(len(c)!=7 or c[0]!='#' for c in self.ui['colors']):
             raise ValueError('색상은 #RRGGBB 형식입니다.')
         for c in self.ui['colors']:
@@ -100,8 +90,6 @@ class Settings:
         고쳐도 개인 파일의 옛 값이 덮어써서 반영되지 않는다.
         """
         self.validate()
-        if 'draw' not in self.mapping.values():
-            raise ValueError('쓰기(draw)를 연결한 제스처가 없습니다. 하나는 draw로 정해 주세요.')
         ui = {k:v for k,v in self.ui.items() if self._ui_defaults.get(k) != v}
         temp = self.user_path.with_suffix('.tmp')
         temp.write_text(json.dumps({'mapping':self.mapping,'ui':ui},indent=2),encoding='utf-8')
