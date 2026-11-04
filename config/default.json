@@ -104,10 +104,13 @@
     "two_finger_curl": 1.45,
     "two_finger_fold": 0.9,
     "swipe_reverse_guard": 1.0,
-    "thumb_motion_distance": 0.13,
-    "thumb_motion_window": 0.65,
-    "thumb_motion_cooldown": 0.65,
-    "thumb_pose_frames": 3
+    "thumb_motion_distance": 0.09,
+    "thumb_motion_window": 0.85,
+    "thumb_motion_cooldown": 0.4,
+    "thumb_pose_frames": 2,
+    "thumb_forward_min": 0.34,
+    "thumb_reach_min": 0.95,
+    "thumb_fold_max": 1.05
   },
   "tracking": {
     "detection_confidence": 0.4
