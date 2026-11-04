@@ -428,7 +428,9 @@ def main() -> None:
                 for i,p in enumerate(calibration_points):
                     cv2.putText(camera,str(i+1),(round(p[0]*639),round(p[1]*479)),cv2.FONT_HERSHEY_SIMPLEX,.8,(0,255,255),2)
             if editing:
-                draw_settings(slide, settings.mapping, row)
+                visible_mapping = {name:action for name,action in settings.mapping.items()
+                                   if name not in ('SWIPE_LEFT','SWIPE_RIGHT')}
+                draw_settings(slide, visible_mapping, row)
             frame_number += 1
             if args.frames and frame_number>=args.frames:
                 print(f'Processed {frame_number} frames; last phase={packet.phase}')
@@ -443,7 +445,7 @@ def main() -> None:
                 break
             up,down,left,right = (2490368,2621440,2424832,2555904)
             if editing:
-                names = list(settings.mapping)
+                names = [name for name in settings.mapping if name not in ('SWIPE_LEFT','SWIPE_RIGHT')]
                 if key in (up,down):
                     row = (row+(-1 if key==up else 1))%len(names)
                     if 'draw' not in settings.mapping.values():
