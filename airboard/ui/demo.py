@@ -426,7 +426,7 @@ def main() -> None:
                 if key in (up,down):
                     row = (row+(-1 if key==up else 1))%len(names)
                 elif key in (left,right):
-                    # 이 제스처에 의미 있는 동작만 돌아가며 고른다. draw를 고르면 다른 제스처의 draw는 none이 된다.
+                    # 이 제스처에 의미 있는 동작만 돌아가며 고른다. draw는 여러 제스처에 지정할 수 있다.
                     name = names[row]
                     choices = allowed_actions(name)
                     current = settings.mapping[name]
