@@ -287,11 +287,90 @@ class MappingRuleTests(unittest.TestCase):
 
     def test_one_shot_and_held_gestures_offer_only_meaningful_actions(self):
         from airboard.ui.settings import allowed_actions
-        for g in ('DOUBLE_CLAP', 'SWIPE_LEFT', 'SWIPE_RIGHT'):
-            self.assertEqual(set(allowed_actions(g)), {'toggle_highlighter', 'page_next', 'page_prev', 'none'})
+        for g in ('DOUBLE_CLAP', 'SWIPE_LEFT', 'SWIPE_RIGHT', 'THUMB_LEFT', 'THUMB_RIGHT'):
+            self.assertEqual(set(allowed_actions(g)),
+                             {'toggle_highlighter', 'undo', 'redo', 'page_next', 'page_prev', 'none'})
         for g in ('PINCH', 'FIST', 'POINTER', 'TWO_FINGERS'):
             self.assertNotIn('page_next', allowed_actions(g))
+            self.assertNotIn('undo', allowed_actions(g))
             self.assertIn('draw', allowed_actions(g))
+
+
+class UndoRedoTests(unittest.TestCase):
+    """엄지 실행 취소/다시 실행: 렌더러 이력, 실수 방지."""
+
+    def thumb_recognizer(self, pose_seq, pinch_ratios=None):
+        """자세 순서를 그대로 넣고 발생한 이벤트와 최종 자세 목록을 돌려준다."""
+        from unittest.mock import patch
+        from airboard.gestures.gesture import GestureRecognizer
+        r = GestureRecognizer(gesture_cfg())
+        hand = np.zeros((21, 3), np.float32)
+        hand[:, 1] = 50
+        hand[0, 1] = 80
+        events, poses = [], []
+        for i, pose in enumerate(pose_seq):
+            ratio = (pinch_ratios or [.6] * len(pose_seq))[i]
+            with patch('airboard.gestures.gesture.classify_pose', return_value=pose), \
+                    patch('airboard.gestures.gesture.pinch_ratio', return_value=ratio):
+                res = r.update([hand], 640, 480, i * .09)
+            events += res.events
+            poses.append(res.pose)
+        return events, poses
+
+    def test_thumb_must_be_held_and_fires_once(self):
+        events, _ = self.thumb_recognizer(['NONE', 'THUMB_LEFT', 'NONE', 'NONE'])
+        self.assertEqual(events, [])                                   # 한 프레임만 잡힌 건 무시
+        events, _ = self.thumb_recognizer(['NONE'] + ['THUMB_LEFT'] * 8)
+        self.assertEqual(events, ['THUMB_LEFT'])                       # 계속 들고 있어도 한 번만
+
+    def test_thumb_from_fist_is_allowed_but_not_while_pinching(self):
+        events, _ = self.thumb_recognizer(['FIST'] * 3 + ['THUMB_LEFT'] * 5)
+        self.assertEqual(events, ['THUMB_LEFT'])                       # 주먹을 쥔 뒤 엄지를 뻗는 자연스러운 동작
+        events, _ = self.thumb_recognizer(['NONE'] * 3 + ['THUMB_RIGHT'] * 5, [.1] * 8)
+        self.assertEqual(events, [])                                   # 핀치를 잡은 채로 엄지 모양이 잡혀도 무시
+        events, _ = self.thumb_recognizer(['NONE'] * 3 + ['THUMB_LEFT'] * 5, [.1] * 3 + [.6] * 5)
+        self.assertEqual(events, ['THUMB_LEFT'])                       # 핀치를 떼고 엄지를 뻗으면 (방금 쓴 획 취소) 허용
+
+    def test_controller_ignores_history_while_writing_or_right_after_erasing(self):
+        c = UIController(Calibration([[0, 0], [1, 0], [1, 1], [0, 1]], (100, 100)), Settings())
+        c.update(InputState((.5, .5), frozenset({'PINCH'})), 0)
+        self.assertEqual(c.update(InputState((.5, .5), frozenset({'PINCH', 'THUMB_LEFT'})), .1).commands, ())
+        for i in range(3):                                             # 주먹 지우개로 지움 (기본 매핑 FIST=eraser)
+            c.update(InputState((.5, .5), frozenset({'FIST'})), .2 + i * .1)
+        c.update(InputState((.5, .5)), .5)
+        self.assertEqual(c.update(InputState((.5, .5), frozenset({'THUMB_LEFT'})), .8).commands, ())   # 지운 직후 0.6초 안
+        self.assertEqual(c.update(InputState((.5, .5), frozenset({'THUMB_LEFT'})), 1.2).commands, ('undo',))
+
+    def test_history_allowed_while_pointer_tool_is_held(self):
+        settings = Settings()
+        settings.mapping.update(FIST='pointer')
+        c = UIController(Calibration([[0, 0], [1, 0], [1, 1], [0, 1]], (100, 100)), settings)
+        for i in range(3):
+            c.update(InputState((.5, .5), frozenset({'FIST'})), i * .1)
+        self.assertEqual(c.update(InputState((.5, .5), frozenset({'THUMB_LEFT'})), .3).commands, ('undo',))
+
+    def test_renderer_undo_redo_and_new_stroke_clears_redo(self):
+        import tempfile
+        from pathlib import Path
+        import pymupdf
+        from airboard.render import AirBoardRenderer, RenderConfig
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'a.pdf'
+            with pymupdf.open() as doc:
+                doc.new_page(width=200, height=200); doc.save(path)
+            with AirBoardRenderer(path, RenderConfig(200, 200, 1, '#000000', 2, '#FFFF00', 16, .3, 30)) as b:
+                bg = b.render_page()
+                b.commit_stroke([(20, 50), (180, 50)])
+                one = b.render_page()
+                b.erase_stroke_at((100, 50))
+                np.testing.assert_array_equal(b.render_page(), bg)
+                self.assertTrue(b.undo())                               # 지우개 취소
+                np.testing.assert_array_equal(b.render_page(), one)
+                self.assertTrue(b.redo())                               # 다시 지움
+                np.testing.assert_array_equal(b.render_page(), bg)
+                b.undo()
+                b.commit_stroke([(20, 150), (180, 150)])                # 새로 쓰면
+                self.assertFalse(b.redo())                              # 다시 실행할 것이 사라진다
 
     def test_draw_moves_to_one_gesture_and_is_required_to_save(self):
         import shutil, tempfile

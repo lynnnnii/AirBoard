@@ -64,7 +64,8 @@ class UIController:
         self._draw_by_pinch = False
         self._was_holding = False
         self._last_pos = None        # 마지막으로 쓴 슬라이드 좌표 (흔들림 유예 중 고정 위치)
-        self._clap_page_until = float('-inf')   # 박수 페이지 이동 재입력 대기 (두 손 프레임은 일반 대기를 계속 늘리므로 따로 둔다)
+        self._clap_page_until = float('-inf')
+        self._last_erase = float('-inf')        # 지우개로 마지막에 지운 시각 (직후 실행 취소 무시용)   # 박수 페이지 이동 재입력 대기 (두 손 프레임은 일반 대기를 계속 늘리므로 따로 둔다)
 
     def update(self, state: InputState, now: float, suppressed: bool = False, navigation_suppressed: bool | None = None) -> RenderPacket:
         """매 프레임 호출. 팔레트·설정·캘리브레이션 중에는 suppressed=True."""
@@ -72,6 +73,15 @@ class UIController:
         nav_suppressed = suppressed if navigation_suppressed is None else navigation_suppressed
         actions = (mapped if not suppressed else
                    mapped & {'toggle_highlighter'} if not nav_suppressed else set())
+        # 실행 취소/다시 실행(기본: 엄지 옆으로)은 쓰거나 지우는 중, 그리고 지우개를 쓴 직후
+        # (history_after_erase_seconds)에는 무시한다. 획 도중에 실행하면 쓰던 획이 잘려 확정된 뒤 바로 취소되고,
+        # 주먹 지우개에서 엄지가 튀어나오면 방금 지운 획이 되살아나기 때문이다. 포인터를 쓰는 중에는 허용한다.
+        history_action = next(iter(actions & {'undo','redo'}), None)
+        if history_action and (self.active or now-self._last_erase < self.settings.ui.get('history_after_erase_seconds', .6)):
+            history_action = None
+        if history_action:
+            actions = actions - {'draw'}
+            self._draw_seen = float('-inf')
         # 'stop'(기본: 검지·중지 두 손가락)은 쓰는 중이라도 그 프레임에 바로 펜을 든다.
         # 아래 흔들림 유예로 이어 쓰지 않도록 마지막 쓰기 시각도 지운다.
         if 'stop' in actions:
@@ -157,7 +167,12 @@ class UIController:
         # 설정에서 박수를 페이지 이동에 연결했다면 쓰는 중이 아닐 때 그 프레임에 바로 넘긴다.
         clap_pages = ({self.settings.mapping.get('DOUBLE_CLAP')} & {'page_next','page_prev'}
                       if 'DOUBLE_CLAP' in state.gestures and not nav_suppressed else set())
-        if clap_pages and not (active or self.active or wanted) and now >= self._clap_page_until:
+        if history_action:
+            commands = (history_action,)
+            self._pending_page = None
+            self._page_blocked_until = now + quiet
+            self.navigation_status = 'history changed'
+        elif clap_pages and not (active or self.active or wanted) and now >= self._clap_page_until:
             commands = (clap_pages.pop(),)
             self._pending_page = None
             self._clap_page_until = self._page_blocked_until = now + self.settings.ui.get('navigation_cooldown_seconds', .8)
@@ -184,6 +199,8 @@ class UIController:
             self.navigation_status = ('page moved' if commands else 'waiting' if self._pending_page
                                       else 'cooldown' if now<self._page_blocked_until else 'ready')
         self.active = bool(active)
+        if active and self.tool == 'eraser':
+            self._last_erase = now
         # 형광펜은 팔레트 색·굵기와 무관하게 고정 색(노랑)과 고정 굵기를 쓴다.
         if self.tool == 'highlighter':
             return RenderPacket(pos,self.tool,bool(active),phase,self.settings.ui.get('highlighter_color','#FFFF00'),

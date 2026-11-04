@@ -103,7 +103,17 @@
     "pointer_keep_pinch": 0.2,
     "two_finger_curl": 1.45,
     "two_finger_fold": 0.9,
-    "swipe_reverse_guard": 1.0
+    "swipe_reverse_guard": 1.0,
+    "history_redo_min_folded_fingers": 3,
+    "history_min_folded_fingers": 4,
+    "history_thumb_reach": 0.9,
+    "history_thumb_x_min": 0.55,
+    "history_thumb_side_ratio": 1.5,
+    "history_thumb_straight": 0.85,
+    "history_gesture_cooldown": 0.55,
+    "history_hold_frames": 3,
+    "history_redo_thumb_reach": 0.6,
+    "history_redo_side_ratio": 1.0
   },
   "tracking": {
     "detection_confidence": 0.4

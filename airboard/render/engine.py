@@ -113,6 +113,7 @@ class AirBoardRenderer:
             raise ValueError('암호가 없고 페이지가 있는 PDF가 필요합니다.')
         self.current_page = 0
         self._history: list[list[_Operation]] = [[] for _ in self.doc]
+        self._redo_history: list[list[_Operation]] = [[] for _ in self.doc]
         self._cache: OrderedDict[int, _Canvas] = OrderedDict()
         self._active: _Active | None = None
         self._next_id = 0
@@ -259,7 +260,9 @@ class AirBoardRenderer:
             return
         if active.stroke.points:
             self._apply(self._canvas(active.stroke.page), active)
-            self._history[active.stroke.page].append(_Operation(active.stroke, active.opacity))
+            page = active.stroke.page
+            self._history[page].append(_Operation(active.stroke, active.opacity))
+            self._redo_history[page].clear()
         self._active = None
 
     def discard_preview(self) -> None:
@@ -346,6 +349,7 @@ class AirBoardRenderer:
                 distance = np.linalg.norm(pts[0]-p)
             if distance <= radius+s.width/2:
                 history.append(_Operation(erased_ids=[s.stroke_id]))
+                self._redo_history[self.current_page].clear()
                 self._cache.pop(self.current_page,None)
                 self._canvas(self.current_page)
                 return True
@@ -387,7 +391,24 @@ class AirBoardRenderer:
         if not history:
             return False
         canvas = self._canvas(self.current_page)
-        history.pop()
+        self._redo_history[self.current_page].append(history.pop())
+        self._rebuild_page(canvas, history)
+        return True
+
+    def redo(self) -> bool:
+        """현재 페이지에서 마지막으로 취소한 작업을 다시 적용한다."""
+        self.end_stroke()
+        redo = self._redo_history[self.current_page]
+        if not redo:
+            return False
+        operation = redo.pop()
+        history = self._history[self.current_page]
+        history.append(operation)
+        self._rebuild_page(self._canvas(self.current_page), history)
+        return True
+
+    def _rebuild_page(self, canvas: _Canvas, history: list[_Operation]) -> None:
+        """작업 이력으로 현재 페이지의 필기 합성을 다시 만든다."""
         # 배경 PDF는 캐시를 재사용하고 필기 레이어만 재구성한다.
         canvas.color.fill(0)
         canvas.alpha.fill(0)
@@ -396,13 +417,13 @@ class AirBoardRenderer:
         for operation in history:
             if operation.stroke is None or operation.stroke.stroke_id not in erased:
                 self._replay(canvas, operation)
-        return True
 
     def clear_page(self) -> None:
         """현재 페이지의 필기만 지우고 실행 취소가 가능한 작업으로 기록한다."""
         self.end_stroke()
         operation = _Operation(clear=True)
         self._history[self.current_page].append(operation)
+        self._redo_history[self.current_page].clear()
         self._replay(self._canvas(self.current_page), operation)
 
     def operation_count(self, page: int | None = None) -> int:
