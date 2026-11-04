@@ -60,12 +60,14 @@ class ClapTests(unittest.TestCase):
         curls={name:2. for name in ('index','middle','ring','pinky')}
         with patch('airboard.gestures.gesture.classify_pose',return_value='OPEN'),patch('airboard.gestures.gesture.finger_curls',return_value=curls),patch.object(r.pinch,'update',return_value=False):
             r.update(pair(4),640,480,0)
-            for t,x in ((.1,100),(.2,240),(.3,400),(.5,100)):
-                self.assertFalse(r.update([hand(x)],640,480,t).events)
+            for t,y in ((.1,100),(.2,240),(.3,400),(.5,100)):
+                sample=hand(100); sample[:,1]+=y-100
+                self.assertFalse(r.update([sample],640,480,t).events)
             found=[]
-            for t,x in ((1.,100),(1.1,180),(1.2,260)):
-                found+=r.update([hand(x)],640,480,t).events
-            self.assertEqual(found,['SWIPE_RIGHT'])
+            for t,y in ((1.,100),(1.1,180),(1.2,260)):
+                sample=hand(100); sample[:,1]+=y-100
+                found+=r.update([sample],640,480,t).events
+            self.assertEqual(found,['SWIPE_DOWN'])
 
     def test_clap_event_toggles_ui_without_page_command(self):
         r=GestureRecognizer(self.config)

@@ -8,7 +8,7 @@ AirBoard - 제스처 판정 모듈 (담당: Kim Hyunbo)
   - result.pen_point   : 필기 좌표 (카메라 픽셀 좌표) -> 좌표 변환 담당에게 전달
   - result.pen_down    : True면 쓰는 중, False면 펜 든 상태
   - result.pose        : 현재 손 모양 ("PINCH", "FIST", "POINTER", "TWO_FINGERS", "OPEN", "NONE")
-  - result.events      : 이번 프레임에 발생한 1회성 이벤트 ("DOUBLE_CLAP", "SWIPE_LEFT", "SWIPE_RIGHT")
+  - result.events      : 이번 프레임에 발생한 1회성 이벤트 ("DOUBLE_CLAP", "SWIPE_UP", "SWIPE_DOWN")
 """
 
 from collections import deque
@@ -66,10 +66,10 @@ CFG = {
     "clap_min_gap": 0.12,    # 너무 짧은 간격(같은 박수가 두 번 세지는 것) 무시
     "clap_cooldown": 1.0,    # DOUBLE_CLAP 직후 이 시간 동안 박수 무시
 
-    # 스와이프: 손을 편 상태에서 손목이 빠르게 좌우로 이동
+    # 스와이프: 손을 편 상태에서 손바닥이 빠르게 위아래로 이동
     "swipe_window": 0.5,     # 이 시간(초) 동안의 이동량을 봄
-    "swipe_dist": 0.18,      # 이동량이 화면 너비의 이 비율 이상이면 스와이프
-    "swipe_max_slope": 0.7,  # 세로 이동 / 가로 이동이 이보다 크면 스와이프 아님 (대각선 허용)
+    "swipe_dist": 0.18,      # 이동량이 화면 높이의 이 비율 이상이면 스와이프
+    "swipe_max_slope": 0.7,  # 가로 이동 / 세로 이동의 최대 비율
     "swipe_open_fingers": 3, # 네 손가락 중 이 개수 이상 펴져 있으면 '손바닥 편 상태'
     "swipe_open_curl": 1.4,  # 손가락 폄 판정 기준 (스와이프용, 일반 기준보다 느슨)
     "swipe_open_ratio": 0.6, # 시간 창 안 프레임 중 이 비율 이상이 '손바닥 편 상태'면 인정 (흔들림 허용)
@@ -260,14 +260,14 @@ class ClapDetector:
 
 
 class SwipeDetector:
-    """손바닥을 편 상태에서 손이 빠르게 좌우로 이동하면 스와이프.
+    """손바닥을 편 상태에서 손이 빠르게 위아래로 이동하면 스와이프.
 
     인식률을 높이기 위한 처리
       - 손목 대신 손바닥 중심을 추적 (더 안정적)
       - 펼친 한 손의 이동을 판정하며 도구 동작/손 소실 시 이력을 초기화
       - 짧은 손가락 검출 흔들림은 허용하지만 해당 프레임 좌표는 기록하지 않음
       - 재입력 방지 시간의 이동은 다음 스와이프 이력에 포함하지 않음
-      - 세로 이동은 절대값이 아니라 가로 이동 대비 비율로 제한 (약간 대각선이어도 인정)
+      - 가로 이동은 세로 이동 대비 비율로 제한 (약간 대각선이어도 인정)
     """
 
     def __init__(self, config=None):
@@ -298,10 +298,10 @@ class SwipeDetector:
         if open_ratio < self.config["swipe_open_ratio"]:
             return None
         dx = self.hist[-1][1] - self.hist[0][1]
-        dy = abs(self.hist[-1][2] - self.hist[0][2])
-        if abs(dx) > self.config["swipe_dist"] and dy < self.config["swipe_max_slope"] * abs(dx):
+        dy = self.hist[-1][2] - self.hist[0][2]
+        if abs(dy) > self.config["swipe_dist"] and abs(dx) < self.config["swipe_max_slope"] * abs(dy):
             self.hist.clear()
-            event = "SWIPE_RIGHT" if dx > 0 else "SWIPE_LEFT"
+            event = "SWIPE_DOWN" if dy > 0 else "SWIPE_UP"
             # 스와이프 뒤 손을 제자리로 되돌리는 동작이 반대 방향 스와이프로 잡히지 않게,
             # swipe_reverse_guard 초 동안은 반대 방향을 무시한다 (같은 방향 연속 스와이프는 그대로 허용).
             if (self._last_swipe is not None and event != self._last_swipe[0]
@@ -324,7 +324,7 @@ class GestureResult:
     pen_down: bool = False                       # True = 쓰는 중 (화면에는 WRITE ON으로 표시)
     pen_point: tuple = None                      # 필기 좌표 (엄지끝과 검지끝의 중간점)
     pointer_point: tuple = None                  # 검지 끝 좌표 (포인터·지우개 위치)
-    events: list = field(default_factory=list)   # DOUBLE_CLAP, SWIPE_LEFT, SWIPE_RIGHT
+    events: list = field(default_factory=list)   # DOUBLE_CLAP, SWIPE_UP, SWIPE_DOWN
     debug: dict = field(default_factory=dict)    # 튜닝용 수치 (핀치 비율, 굽힘 비율 등)
 
 
@@ -410,6 +410,12 @@ class GestureRecognizer:
             pose = "NONE"
 
         # 양손이 보이면(박수 중일 수 있음) 필기를 막는다
+        # 핀치 필기는 벌리는 순간 획 자체를 끝낸다. 좌표만 얼리면 다시 붙일 때
+        # 같은 획으로 이어진다. 핀치를 지우개 등에 매핑했을 때는 기존 해제를 유지한다.
+        release = self.config.get('pinch_immediate_off', float('inf'))
+        if self.config.get('pinch_writing', True):
+            release = min(release, self.config.get('pinch_hold', release))
+        self.pinch.config['pinch_immediate_off'] = release
         r.pen_down = self.pinch.update(
             ratio, blocked=(pose == "FIST" or ink_busy or (fist_candidate and not self.pinch.down)),
             observe_release=(ink_busy and len(hands)==1 and not fist_candidate))

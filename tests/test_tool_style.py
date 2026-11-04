@@ -229,8 +229,8 @@ class CustomMappingTests(unittest.TestCase):
             r = GestureRecognizer({**gesture_cfg(), 'pinch_writing': pinch_writing})
             out = feed(r, open_, tips, [.1, .1, .1, .3, .3], xs=[100, 100, 100, 150, 200])
             xs = [o.pen_point[0] for o in out if o.pen_down]
-            if frozen:                                                       # 핀치로 쓸 때: 살짝 벌리면 잉크 멈춤 (원래대로)
-                self.assertEqual(xs, [100, 100, 100])
+            if frozen:                                                       # 핀치로 쓸 때: 살짝 벌리면 획 종료
+                self.assertEqual(xs, [100])
             else:                                                            # 핀치가 지우개일 때: 위치가 손을 따라간다
                 self.assertEqual(xs, [100, 150, 200])
 

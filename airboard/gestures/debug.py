@@ -108,9 +108,9 @@ def main():
         prev = now
         for e in r.events:
             print(f"[{now:.2f}] EVENT {e}")      # 터미널에만 기록
-            if e == "SWIPE_RIGHT":
+            if e == "SWIPE_DOWN":
                 flash_text, flash_until = "NEXT PAGE", now + CFG["mode_flash"]
-            elif e == "SWIPE_LEFT":
+            elif e == "SWIPE_UP":
                 flash_text, flash_until = "PREV PAGE", now + CFG["mode_flash"]
         flash = flash_text if now < flash_until else None
 

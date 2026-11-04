@@ -15,7 +15,7 @@ class InputState:
 
 @dataclass(frozen=True)
 class RenderPacket:
-    """up은 좌표가 없어도 기존 획 종료. tool은 현재 선택 도구."""
+    """up은 좌표가 없어도 기존 획 종료. width는 도구별 최종 픽셀 지름."""
     position: tuple[float,float] | None
     tool: str
     active: bool
@@ -95,7 +95,7 @@ class UIController:
         else:
             self.candidate,self.count = wanted,1
         if wanted is None:
-            if self.temporary:
+            if self.temporary == 'eraser':
                 self.blocked = True
             self.temporary = None
         elif self.count >= (self.settings.ui.get('eraser_hold_frames',1) if wanted=='eraser' else self.settings.ui['tool_hold_frames']):

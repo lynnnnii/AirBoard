@@ -153,6 +153,9 @@ class StrokeSmoother:
             self.filter.reset()
             return SmoothResult(finished=self._finish() if self.stroke is not None else None)
 
+        # 호버나 직전 획의 지연이 새 획의 시작점으로 끌려오지 않게 한다.
+        if pen_down and self.stroke is None:
+            self.filter.reset()
         p = tuple(float(v) for v in self.filter(point, t))
         finished = None
         if pen_down and self.stroke is None:

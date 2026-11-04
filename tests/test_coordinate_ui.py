@@ -79,9 +79,9 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.frame('DOUBLE_CLAP',position=None).tool,'highlighter')
         self.assertEqual(self.frame().tool,'highlighter')
         self.frame('PINCH')
-        self.assertEqual(self.frame('PINCH','SWIPE_RIGHT').commands,())
+        self.assertEqual(self.frame('PINCH','SWIPE_DOWN').commands,())
         self.frame()
-        self.assertEqual(self.frame('SWIPE_RIGHT',now=2.).commands,('page_next',))
+        self.assertEqual(self.frame('SWIPE_DOWN',now=2.).commands,('page_next',))
         self.assertEqual(self.frame().commands,())
 
     def test_pointer_and_suppression(self) -> None:
@@ -121,14 +121,16 @@ class StateTests(unittest.TestCase):
         self.c.calibration = Calibration([[0,0],[1,0],[1,1],[0,1]],(1280,720))
         self.frame('PINCH')
         renderer = PreviewRenderer((1280,720))
-        renderer.previous = (10,10)
+        self.addCleanup(renderer.close)
+        renderer.board.begin_stroke()
+        renderer.board.add_point(10,10)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'cal.json'
             reset_calibration(self.c,renderer,self.settings.ui['default_corners'],path)
             saved = Calibration.load(path)
             np.testing.assert_allclose(saved.corners,self.settings.ui['default_corners'])
             self.assertEqual(saved.size,(1280,720))
-        self.assertIsNone(renderer.previous)
+        self.assertEqual(renderer.board.operation_count(),1)
         self.assertFalse(self.frame('PINCH').active)
         self.frame()
         self.assertTrue(self.frame('PINCH').active)
@@ -163,6 +165,7 @@ class StateTests(unittest.TestCase):
 
     def test_render_and_overlay(self) -> None:
         renderer,overlay = PreviewRenderer((960,540)),Overlay(self.settings)
+        self.addCleanup(renderer.close)
         image = renderer.consume(self.frame('PINCH'))
         self.assertTrue(np.any(image!=255))
         overlay.draw(image,self.frame('PINCH'),'pen')

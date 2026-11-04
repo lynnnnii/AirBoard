@@ -12,10 +12,10 @@
     "max_width": 1280,
     "max_height": 640,
     "cache_pages": 3,
-    "pen_color": "#FF3030",
-    "pen_width": 4.0,
+    "pen_color": "#2563eb",
+    "pen_width": 2.0,
     "highlighter_color": "#FFFF00",
-    "highlighter_width": 24.0,
+    "highlighter_width": 16.0,
     "highlighter_opacity": 0.3,
     "eraser_width": 40.0
   },
@@ -45,7 +45,7 @@
     "colors": [
       "#2563eb",
       "#dc2626",
-      "#111827"
+      "#000000"
     ],
     "widths": [
       1,
@@ -63,7 +63,7 @@
       "one_euro_min_cutoff": 1.5,
       "one_euro_beta": 0.01,
       "start_skip": 0,
-      "end_trim": 0,
+      "end_trim": 2,
       "spline": true
     },
     "highlighter_color": "#FFFF00",

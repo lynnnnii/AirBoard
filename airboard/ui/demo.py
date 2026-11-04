@@ -12,32 +12,6 @@ from .controller import InputState, UIController, from_gesture_result
 from .overlay import Overlay, bgr
 
 
-class PreviewRenderer:
-    """흰 배경 데모 전용 레이어. PDF/저장/undo는 팀 render 담당."""
-    def __init__(self, size: tuple[int,int]) -> None:
-        w,h = size
-        self.ink = np.full((h,w,3),255,np.uint8)
-        self.previous = None
-
-    def consume(self, packet: object) -> np.ndarray:
-        """렌더 패킷을 소비하고 UI를 그릴 복사본을 반환한다."""
-        if not packet.active:
-            self.previous = None
-        if packet.active and packet.position:
-            p = tuple(round(v) for v in packet.position)
-            a = self.previous or p
-            if packet.tool=='eraser':
-                cv2.line(self.ink,a,p,(255,255,255),30,cv2.LINE_AA)
-            elif packet.tool=='highlighter':
-                layer = self.ink.copy()
-                cv2.line(layer,a,p,bgr(packet.color),packet.width,cv2.LINE_AA)
-                cv2.addWeighted(layer,packet.opacity,self.ink,1-packet.opacity,0,dst=self.ink)
-            else:
-                cv2.line(self.ink,a,p,bgr(packet.color),packet.width,cv2.LINE_AA)
-            self.previous = p
-        return self.ink.copy()
-
-
 class PDFRenderer:
     """UI 패킷을 팀 PDF 렌더러의 공개 API에 연결한다."""
     def __init__(self, path: str, config: object, state_dir: Path | None = None, smoothing_config: dict | None = None) -> None:
@@ -89,19 +63,26 @@ class PDFRenderer:
         """PDF 좌표를 팀 보정기에 통과시켜 미리보기와 최종 획을 분리한다."""
         self.display_position = packet.position
         tail = None
-        if packet.tool != 'eraser' or not packet.active:
+        if packet.tool != 'eraser' or not packet.active or packet.phase == 'down':
             self._erase_previous = None
         if packet.tool == 'eraser':
-            # 주먹을 쥔 채 지나간 길을 반경 간격으로 나눠 닿은 획을 통째로 지운다 (빠르게 움직여도 건너뛰지 않음).
-            self.finish_stroke()
+            # 이동 경로를 검사하되 한 프레임에 최상단 획 하나만 지운다.
+            # 같은 위치에서 유지할 때 겹친 획까지 연속 삭제하지 않는다.
+            if self._last_tool != 'eraser':
+                self.finish_stroke()
+            self._last_tool = 'eraser'
             if packet.active and packet.position is not None:
                 start = self._erase_previous or packet.position
                 radius = packet.width/2
-                steps = max(1,int(np.linalg.norm(np.asarray(packet.position)-start)/max(radius,1))+1)
-                for p in np.linspace(start,packet.position,steps+1):
-                    self.board.erase_stroke_at(tuple(p),radius=radius)
-                self._erase_previous = packet.position
-            self._dirty = True
+                distance = np.linalg.norm(np.asarray(packet.position)-start)
+                if self._erase_previous is None or distance >= max(radius,1):
+                    steps = max(1,int(distance/max(radius,1))+1)
+                    for p in np.linspace(start,packet.position,steps+1)[1:]:
+                        if self.board.erase_stroke_at(tuple(p),radius=radius):
+                            self._dirty = True
+                            break
+                    self._erase_previous = packet.position
+            self._was_active = packet.active
             self.checkpoint(force=not packet.active)
             return self.board.render_page()
         if self.smoother is None:
@@ -177,15 +158,41 @@ class PDFRenderer:
             self.board.close()
 
 
+class PreviewRenderer(PDFRenderer):
+    """흰 배경에서도 PDF와 같은 획/지우개/형광펜 합성 경로를 사용한다."""
+
+    def __init__(self, size: tuple[int, int], smoothing_config: dict | None = None) -> None:
+        import tempfile
+        from dataclasses import replace
+        import pymupdf
+        from airboard.render import RenderConfig
+        self._temporary = tempfile.TemporaryDirectory(prefix='airboard-preview-')
+        path = Path(self._temporary.name) / 'blank.pdf'
+        try:
+            with pymupdf.open() as doc:
+                doc.new_page(width=size[0], height=size[1])
+                doc.save(path)
+            config = replace(RenderConfig.from_json(ROOT/'config/default.json'),
+                             max_width=size[0], max_height=size[1])
+            super().__init__(str(path), config, smoothing_config=smoothing_config)
+        except Exception:
+            self._temporary.cleanup()
+            raise
+
+    def close(self) -> None:
+        """흰 배경을 위한 임시 PDF까지 해제한다."""
+        try:
+            super().close()
+        finally:
+            self._temporary.cleanup()
+
+
 def reset_calibration(controller: UIController, renderer: object,
                       corners: list, path: object) -> None:
     """기본 영역을 저장하고 현재 획을 종료해 새 좌표계로 연결되지 않게 한다."""
     candidate = Calibration(corners, controller.calibration.size)
     candidate.save(path)
-    if isinstance(renderer, PDFRenderer):
-        renderer.finish_stroke()
-    else:
-        renderer.previous = None
+    renderer.finish_stroke()
     controller.calibration = candidate
     controller.active = False
     controller.blocked = True
@@ -202,7 +209,7 @@ def compose_screen(camera: np.ndarray, slide: np.ndarray, page: int,
     screen[height:] = (32, 32, 32)
     page_label = f'PDF PAGE {page}/{page_count}' if page_count is not None else f'PREVIEW PAGE {page} (no PDF)'
     lines = [f'{page_label} | TOOL: {tool.upper()} | {message}',
-             'S Settings  C Set area  R Reset area  X Clear  [ ] Text size  Q Quit']
+             'UP/DOWN Page  Z Undo  S Settings  C Area  R Reset  X Clear  [ ] Size  Q Quit']
     for i, line in enumerate(lines):
         cv2.putText(screen, line, (16, height + 28 + i * 34),
                     cv2.FONT_HERSHEY_SIMPLEX, .65, (255, 255, 255), 2, cv2.LINE_AA)
@@ -248,16 +255,17 @@ def main() -> None:
     size = tuple(settings.ui['slide_size'])
     calfile = ROOT/'config/calibration-user.json'
     calibration = Calibration.load(calfile) if calfile.exists() else Calibration(settings.ui['default_corners'],size)
-    renderer = PreviewRenderer(calibration.size)
+    from airboard.smoothing.stroke import load_config
+    smoothing_cfg = None if args.no_smoothing else {**load_config(str(ROOT/'config/default.json')),
+                                                   **settings.ui.get('handwriting_smoothing',{})}
     if args.pdf:
         from dataclasses import replace
         from airboard.render import RenderConfig
         cfg = replace(RenderConfig.from_json(ROOT/'config/default.json'), max_width=1280, max_height=720)
-        from airboard.smoothing.stroke import load_config
-        smoothing_cfg = None if args.no_smoothing else {**load_config(str(ROOT/'config/default.json')),
-                                                       **settings.ui.get('handwriting_smoothing',{})}
         renderer = PDFRenderer(args.pdf, cfg, state_dir=ROOT/'data/sessions',smoothing_config=smoothing_cfg)
         calibration = Calibration(calibration.corners.tolist(), renderer.board.slide_size)
+    else:
+        renderer = PreviewRenderer(calibration.size, smoothing_cfg)
     controller = UIController(calibration,settings)
     overlay = Overlay(settings)
     camera_width, camera_height = (512,384) if args.pdf else (640,480)
@@ -274,7 +282,9 @@ def main() -> None:
             controller.blocked = True
         else:
             page = max(1,page+offset)
-            renderer.previous = None
+            renderer.finish_stroke()
+            controller.active = False
+            controller.blocked = True
         if page == previous_page:
             return 'Page boundary reached'
         return ('NEXT' if offset>0 else 'PREVIOUS') + f': {previous_page} -> {page}'
@@ -391,9 +401,8 @@ def main() -> None:
                 if frame_number%30==0:
                     trace_stream.flush()
             notice = controller.notification if now<controller.notice_until else ''
-            if args.pdf:
-                from dataclasses import replace
-                packet=replace(packet,position=renderer.display_position)
+            from dataclasses import replace
+            packet=replace(packet,position=renderer.display_position)
             overlay.draw(slide,packet,notice)
             contour = np.rint(controller.calibration.corners*np.float32([639,479])).astype(np.int32)
             cv2.polylines(camera,[contour],True,(0,180,180),2)
@@ -414,10 +423,12 @@ def main() -> None:
                 break
             if args.headless:
                 continue
-            screen = compose_screen(cv2.resize(camera,(camera_width,camera_height)), slide, page, packet.tool, message,
+            screen = compose_screen(cv2.resize(camera,(camera_width,camera_height)), slide, page, packet.tool, notice or message,
                                     renderer.board.page_count if args.pdf else None)
             cv2.imshow('AirBoard UI demo',screen)
             key = cv2.waitKeyEx(16)
+            key = {65362:2490368, 65364:2621440, 65361:2424832, 65363:2555904,
+                   63232:2490368, 63233:2621440, 63234:2424832, 63235:2555904}.get(key, key)
             if key==ord('q') or cv2.getWindowProperty('AirBoard UI demo',cv2.WND_PROP_VISIBLE)<1:
                 break
             up,down,left,right = (2490368,2621440,2424832,2555904)
@@ -465,25 +476,26 @@ def main() -> None:
             elif key==ord('s'):
                 backup = settings.mapping.copy()
                 editing,row = True,0
-            elif key in (left,right):
-                message = move_page(-1 if key==left else 1)
+            elif key in (up,down,left,right):
+                message = move_page(-1 if key in (up,left) else 1)
+            elif key==ord('z'):
+                renderer.finish_stroke()
+                renderer.board.undo()
+                renderer.checkpoint(force=True)
+                controller.active = False
+                controller.blocked = True
             elif key in (ord('['),ord(']')):
                 # 글씨 크기 30~100% 조절 (이번 실행에만 적용, 기본값은 config의 ui.writing_scale)
                 step = -.1 if key==ord('[') else .1
                 controller.writing_scale = round(min(1.,max(.3,controller.writing_scale+step)),1)
                 message = f'Text size {round(controller.writing_scale*100)}%'
             elif key==ord('x'):
-                if args.pdf:
-                    renderer.clear_page()
-                else:
-                    renderer.ink[:] = 255
-                    renderer.previous = None
+                renderer.clear_page()
                 controller.active = False
                 controller.blocked = True
     finally:
         try:
-            if args.pdf:
-                renderer.close()
+            renderer.close()
         finally:
             if trace_stream is not None:
                 trace_stream.close()

@@ -44,9 +44,25 @@ class Settings:
         self.user_path = Path(override) if override else self.root/'config/ui-user.json'
         if self.user_path.exists():
             user = read_json(self.user_path)
+            mapping = dict(user['mapping'])
+            for old, new in (('SWIPE_LEFT', 'SWIPE_UP'), ('SWIPE_RIGHT', 'SWIPE_DOWN')):
+                if old in mapping:
+                    mapping.setdefault(new, mapping.pop(old))
             # 개인 매핑에 없는 제스처(나중에 추가된 기본 제스처)는 기본값을 쓴다.
-            self.mapping = {**self.mapping, **user['mapping']}
-            self.ui.update(user['ui'])
+            self.mapping = {**self.mapping, **mapping}
+            overrides = dict(user['ui'])
+            if user.get('version', 1) < 2:
+                # 옛 설정 화면이 통째로 저장한 팔레트/꼬리 제거 기본값을 이관한다.
+                for key in ('colors', 'widths', 'highlighter_color'):
+                    overrides.pop(key, None)
+                smoothing = dict(overrides.get('handwriting_smoothing', {}))
+                if smoothing.get('end_trim') == 0:
+                    smoothing.pop('end_trim')
+                overrides['handwriting_smoothing'] = smoothing
+            smoothing = {**self.ui.get('handwriting_smoothing', {}),
+                         **overrides.pop('handwriting_smoothing', {})}
+            self.ui.update(overrides)
+            self.ui['handwriting_smoothing'] = smoothing
             self._repair_mapping(defaults)
         self.validate()
 
@@ -104,5 +120,5 @@ class Settings:
             raise ValueError('쓰기(draw)를 연결한 제스처가 없습니다. 하나는 draw로 정해 주세요.')
         ui = {k:v for k,v in self.ui.items() if self._ui_defaults.get(k) != v}
         temp = self.user_path.with_suffix('.tmp')
-        temp.write_text(json.dumps({'mapping':self.mapping,'ui':ui},indent=2),encoding='utf-8')
+        temp.write_text(json.dumps({'version':2,'mapping':self.mapping,'ui':ui},indent=2),encoding='utf-8')
         temp.replace(self.user_path)

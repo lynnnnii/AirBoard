@@ -144,14 +144,22 @@ class AirBoardRenderer:
         bg = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         canvas = _Canvas(bg, np.zeros(bg.shape, np.float32),
                          np.zeros((*bg.shape[:2], 1), np.float32), bg.copy())
-        erased = {i for op in self._history[index] for i in (op.erased_ids or [])}
-        for operation in self._history[index]:
-            if operation.stroke is None or operation.stroke.stroke_id not in erased:
-                self._replay(canvas, operation)
+        self._rebuild(canvas, index)
         self._cache[index] = canvas
         while len(self._cache) > self.config.cache_pages:
             self._cache.popitem(last=False)
         return canvas
+
+    def _rebuild(self, canvas: _Canvas, page: int) -> None:
+        """PDF 배경을 다시 렌더링하지 않고 필기 이력만 재구성한다."""
+        canvas.color.fill(0)
+        canvas.alpha.fill(0)
+        canvas.composed[:] = canvas.background
+        history = self._history[page]
+        erased = {i for op in history for i in (op.erased_ids or [])}
+        for operation in history:
+            if operation.stroke is None or operation.stroke.stroke_id not in erased:
+                self._replay(canvas, operation)
 
     def _settings(self, tool: Tool) -> tuple[str, float, float]:
         """모드별 기본 색상, 지름, 투명도."""
@@ -345,9 +353,9 @@ class AirBoardRenderer:
             else:
                 distance = np.linalg.norm(pts[0]-p)
             if distance <= radius+s.width/2:
+                canvas = self._canvas(self.current_page)
                 history.append(_Operation(erased_ids=[s.stroke_id]))
-                self._cache.pop(self.current_page,None)
-                self._canvas(self.current_page)
+                self._rebuild(canvas, self.current_page)
                 return True
         return False
 
@@ -389,13 +397,7 @@ class AirBoardRenderer:
         canvas = self._canvas(self.current_page)
         history.pop()
         # 배경 PDF는 캐시를 재사용하고 필기 레이어만 재구성한다.
-        canvas.color.fill(0)
-        canvas.alpha.fill(0)
-        canvas.composed[:] = canvas.background
-        erased = {i for op in history for i in (op.erased_ids or [])}
-        for operation in history:
-            if operation.stroke is None or operation.stroke.stroke_id not in erased:
-                self._replay(canvas, operation)
+        self._rebuild(canvas, self.current_page)
         return True
 
     def clear_page(self) -> None:
