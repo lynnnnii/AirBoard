@@ -64,6 +64,7 @@ class UIController:
         self._draw_by_pinch = False
         self._was_holding = False
         self._last_pos = None        # 마지막으로 쓴 슬라이드 좌표 (흔들림 유예 중 고정 위치)
+        self._last_erase = float('-inf')
         self._clap_page_until = float('-inf')   # 박수 페이지 이동 재입력 대기 (두 손 프레임은 일반 대기를 계속 늘리므로 따로 둔다)
 
     def update(self, state: InputState, now: float, suppressed: bool = False, navigation_suppressed: bool | None = None) -> RenderPacket:
@@ -150,11 +151,15 @@ class UIController:
         phase ='move' if active and self.active else 'down' if active else 'up' if self.active else 'hover'
         # 손 제스처로 페이지를 넘기는 기능은 오작동 방지를 위해 비활성화한다.
         history_actions = mapped & {'undo', 'redo'}
+        # PR #13: 주먹 지우개 직후 엄지로 전환하다 발생한 잘못된 실행 취소 방지.
+        recently_erased = now - self._last_erase < self.settings.ui.get('history_after_erase_seconds', .6)
         commands = (next(iter(history_actions)),) if (len(history_actions) == 1 and not suppressed
                     and not nav_suppressed and not active and not self.active
-                    and not wanted and state.navigation_allowed) else ()
+                    and not wanted and not recently_erased and state.navigation_allowed) else ()
         self.navigation_status = 'ink history' if commands else 'disabled'
         self.active = bool(active)
+        if active and self.tool == 'eraser':
+            self._last_erase = now
         # 형광펜은 팔레트 색·굵기와 무관하게 고정 색(노랑)과 고정 굵기를 쓴다.
         if self.tool == 'highlighter':
             return RenderPacket(pos,self.tool,bool(active),phase,self.settings.ui.get('highlighter_color','#FFFF00'),
