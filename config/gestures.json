@@ -3,7 +3,5 @@
   "DOUBLE_CLAP": "toggle_highlighter",
   "FIST": "eraser",
   "POINTER": "pointer",
-  "SWIPE_LEFT": "page_prev",
-  "SWIPE_RIGHT": "page_next",
   "TWO_FINGERS": "stop"
 }
