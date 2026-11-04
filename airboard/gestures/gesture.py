@@ -168,6 +168,27 @@ def is_thumb_up(lm, config=None):
     return thumb_extended and folded_count >= 3
 
 
+def sideways_thumb_pose(lm, config=None):
+    """PR #13 방식: 주먹에서 엄지를 화면 좌/우로 뻗는 자세를 FIST보다 먼저 식별."""
+    cfg = {**CFG, **(config or {})}
+    scale = palm_size(lm)
+    thumb = lm[THUMB_TIP, :2] - lm[2, :2]
+    dx, dy = float(thumb[0]) / scale, float(thumb[1]) / scale
+    reach = dist(lm[THUMB_TIP, :2], lm[INDEX_MCP, :2]) / scale
+    straight = dist(lm[2, :2], lm[THUMB_TIP, :2]) / (
+        dist(lm[2, :2], lm[3, :2]) + dist(lm[3, :2], lm[THUMB_TIP, :2]) + 1e-6)
+    folded = sum(v < cfg.get('history_fold_limit', .8) for v in tip_to_palm(lm).values())
+    if folded < cfg.get('history_min_folded_fingers', 3):
+        return None
+    if straight < cfg.get('history_thumb_straight', .83):
+        return None
+    if dx < -cfg.get('history_thumb_x_min', .48) and -dx > cfg.get('history_thumb_side_ratio', 1.25) * abs(dy) and reach > cfg.get('history_thumb_reach', .85):
+        return 'THUMB_LEFT'
+    if dx > cfg.get('history_thumb_x_min', .48) and dx > cfg.get('history_redo_side_ratio', 1.0) * abs(dy) and reach > cfg.get('history_redo_thumb_reach', .6):
+        return 'THUMB_RIGHT'
+    return None
+
+
 class ThumbSwipeDetector:
     """엄지척 자세를 유지한 한 손의 좌/우 이동을 한 번의 명령으로 변환한다."""
 
@@ -400,6 +421,11 @@ class GestureRecognizer:
         self._ink_blocked_until = 0.
         self.swipe = SwipeDetector(config)
         self.thumb_swipe = ThumbSwipeDetector(config)
+        self._side_thumb_pose = None
+        self._side_thumb_frames = 0
+        self._side_thumb_missing = 0
+        self._side_thumb_triggered = False
+        self._side_thumb_cooldown_until = 0.
         self.fist_count = 0
         self._last_ink_point = None
         self._prev_pose = 'NONE'     # 직전 프레임 자세 (검지 자세 유지 판정용)
@@ -425,6 +451,10 @@ class GestureRecognizer:
             self.fist_count = 0
             self.swipe.update(None, False, frame_w, frame_h, t)
             self.thumb_swipe.update(None, False, frame_w, frame_h, t)
+            self._side_thumb_pose = None
+            self._side_thumb_frames = 0
+            self._side_thumb_missing = 0
+            self._side_thumb_triggered = False
             r.debug = {"hand_count": 0, "clap_touch": self.clap.touching, "clap_count": len(self.clap.claps)}
             return r
 
@@ -435,14 +465,33 @@ class GestureRecognizer:
         tips = tip_to_palm(lm)
         pose = classify_pose(lm, curls, tips)
         ratio = pinch_ratio(lm)
-        thumb_pose = (len(hands) == 1 and not clap_busy
+        # PR #13: 엄지를 옆으로 뻗은 손 모양을 주먹(FIST)보다 먼저 식별한다.
+        # 두 프레임 유지하고, 한번 실행한 뒤에는 자세를 풀어야 재실행한다.
+        side_pose = (sideways_thumb_pose(lm, self.config)
+                     if len(hands) == 1 and not clap_busy and not self.pinch.down else None)
+        if side_pose:
+            self._side_thumb_missing = 0
+            self._side_thumb_frames = self._side_thumb_frames + 1 if side_pose == self._side_thumb_pose else 1
+            self._side_thumb_pose = side_pose
+            if (self._side_thumb_frames >= self.config.get('history_hold_frames', 2)
+                    and not self._side_thumb_triggered and t >= self._side_thumb_cooldown_until):
+                r.events.append(side_pose)
+                self._side_thumb_triggered = True
+                self._side_thumb_cooldown_until = t + self.config.get('history_gesture_cooldown', .45)
+        else:
+            self._side_thumb_missing += 1
+            if self._side_thumb_missing >= 2:
+                self._side_thumb_pose = None
+                self._side_thumb_frames = 0
+                self._side_thumb_triggered = False
+        thumb_pose = (len(hands) == 1 and not clap_busy and side_pose is None
                       and is_thumb_up(lm, self.config))
         thumb_event = self.thumb_swipe.update(
             palm_center(lm) if thumb_pose else None, thumb_pose, frame_w, frame_h, t)
         if thumb_event:
             r.events.append(thumb_event)
-        if thumb_pose:
-            pose = 'NONE'   # 주먹 지우개·포인터로 잘못 분류되지 않게 한다.
+        if thumb_pose or side_pose:
+            pose = 'NONE'   # 엄지 자세 후보를 주먹 지우개로 오인하지 않게 한다.
         # 아래 두 판정은 UI가 매핑을 보고 켤 때만 쓴다. 핀치로 쓰는 기본 설정에서는 원래 판정과 똑같이 동작해야 한다.
         #  - index_writing: 검지로 쓰는 설정 (검지 자세 유지 + ✌️ 인식)
         #  - two_fingers: ✌️를 다른 동작에 연결한 설정 (✌️ 인식만)
@@ -482,11 +531,11 @@ class GestureRecognizer:
 
         # 양손이 보이면(박수 중일 수 있음) 필기를 막는다
         r.pen_down = self.pinch.update(
-            ratio, blocked=(pose == "FIST" or thumb_pose or ink_busy or (fist_candidate and not self.pinch.down)),
+            ratio, blocked=(pose == "FIST" or thumb_pose or side_pose is not None or ink_busy or (fist_candidate and not self.pinch.down)),
             observe_release=(ink_busy and len(hands)==1 and not fist_candidate))
         if r.pen_down:
             pose = "PINCH"
-        if thumb_pose:
+        if thumb_pose or side_pose:
             pose = "NONE"
         if ink_busy:
             pose = 'NONE'
@@ -515,6 +564,8 @@ class GestureRecognizer:
                    "swipe_open_count": 0,
                    "clap_ink_blocked": ink_busy,
                    "clap_navigation_blocked": clap_busy,
+                   "thumb_side": side_pose or "NONE",
+                   "thumb_side_frames": self._side_thumb_frames,
                    "pinch_armed": self.pinch.armed,
                    "fist_confirm_frames": self.fist_count,
                    "clap_count": len(self.clap.claps),
