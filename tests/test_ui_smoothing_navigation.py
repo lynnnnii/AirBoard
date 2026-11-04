@@ -95,7 +95,7 @@ class NavigationTests(unittest.TestCase):
         frame(0,'PINCH'); frame(.1)
         self.assertEqual(frame(.2,'SWIPE_RIGHT').commands,())
         self.assertEqual(frame(.7,'DOUBLE_CLAP','SWIPE_RIGHT').commands,())
-        self.assertEqual(frame(1.3,'SWIPE_RIGHT').commands,('page_next',))
+        self.assertEqual(frame(1.3,'SWIPE_RIGHT').commands,())
         self.assertEqual(frame(1.4,'SWIPE_LEFT').commands,())
         self.assertEqual(frame(2.2,'SWIPE_LEFT','SWIPE_RIGHT').commands,())
 
@@ -108,7 +108,7 @@ class NavigationTests(unittest.TestCase):
         result.hands=[object()]; result.pose='POINTER'
         self.assertEqual(c.update(from_gesture_result(result,(100,100)),1).commands,())
         result.pose='OPEN'
-        self.assertEqual(c.update(from_gesture_result(result,(100,100)),2).commands,('page_next',))
+        self.assertEqual(c.update(from_gesture_result(result,(100,100)),2).commands,())
 
     def test_swipe_does_not_reuse_tool_movement(self):
         """이전 펼친 손과 도구 동작의 이동을 이어 스와이프로 판정하지 않는다."""
@@ -129,7 +129,7 @@ class NavigationTests(unittest.TestCase):
                                pen_point=(50,50),pointer_point=(50,50),events=['SWIPE_RIGHT'])
         state=from_gesture_result(result,(100,100))
         self.assertTrue(state.navigation_allowed)
-        self.assertEqual(c.update(state,0).commands,('page_next',))
+        self.assertEqual(c.update(state,0).commands,())
 
     def test_short_open_hand_detection_gap_is_tolerated(self):
         """짧은 손가락 추정 흔들림은 무시하지만 그 프레임의 좌표는 쓰지 않는다."""
@@ -146,14 +146,14 @@ class NavigationTests(unittest.TestCase):
         c.update(InputState((.5,.5)),.1)
         p=c.update(InputState((.5,.5),frozenset({'SWIPE_RIGHT'})),.2)
         self.assertEqual(p.commands,())
-        self.assertEqual(c.update(InputState((.5,.5)),.3).commands,('page_next',))
+        self.assertEqual(c.update(InputState((.5,.5)),.3).commands,())
         self.assertEqual(c.update(InputState((.5,.5)),.4).commands,())
 
     def test_passive_palette_does_not_swallow_swipe(self):
         """팔레트를 지나가는 것과 설정 모드 차단을 구별한다."""
         c=self.controller()
         state=InputState((.2,.03),frozenset({'SWIPE_RIGHT'}))
-        self.assertEqual(c.update(state,0,suppressed=True,navigation_suppressed=False).commands,('page_next',))
+        self.assertEqual(c.update(state,0,suppressed=True,navigation_suppressed=False).commands,())
         c=self.controller()
         self.assertEqual(c.update(state,0,suppressed=True,navigation_suppressed=True).commands,())
 
