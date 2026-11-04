@@ -96,6 +96,7 @@
     "clap_reacquire_seconds": 0.85,
     "swipe_dist": 0.14,
     "swipe_cooldown": 0.45,
+    "swipe_vertical_dist": 0.16,
     "pinch_immediate_off": 0.6,
     "pinch_hold": 0.28,
     "pointer_keep_curl": 1.3,
