@@ -485,6 +485,11 @@ def main() -> None:
             elif key==ord('s'):
                 backup = settings.mapping.copy()
                 editing,row = True,0
+            elif key in (ord('z'), ord('y')):
+                if args.pdf:
+                    changed = renderer.undo() if key == ord('z') else renderer.redo()
+                    label = 'UNDO' if key == ord('z') else 'REDO'
+                    message = label if changed else label + ': no history'
             elif key in (left,right):
                 message = move_page(-1 if key==left else 1)
             elif key in (ord('['),ord(']')):
