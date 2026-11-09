@@ -1,8 +1,8 @@
-"""AirBoard 진입점 (인자 파싱, 메인 루프)."""
+"""AirBoard entry point (argument parsing and main loop)."""
 
 
 def main() -> None:
-    """메인 루프. 구현 예정."""
+    """Main loop; not yet implemented."""
     raise NotImplementedError
 
 
