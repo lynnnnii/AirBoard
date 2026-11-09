@@ -1,6 +1,6 @@
-"""카메라/창 없이 좌표·UI 상태 및 팀 인식 어댑터를 검증한다."""
+"""Test coordinate mapping, UI state, and the recognition adapter without a camera or window."""
 import os
-os.environ.setdefault('AIRBOARD_USER_SETTINGS', os.path.join(os.path.dirname(__file__), '_no_user_settings.json'))  # 개인 설정 없이 팀 기본값으로 검사
+os.environ.setdefault('AIRBOARD_USER_SETTINGS', os.path.join(os.path.dirname(__file__), '_no_user_settings.json'))  # Test with team defaults rather than personal settings
 import json
 from pathlib import Path
 import tempfile
@@ -15,7 +15,7 @@ from airboard.ui.demo import PreviewRenderer, compose_screen, draw_settings, res
 
 
 class CoordinateTests(unittest.TestCase):
-    """독립적인 기하 기준으로 호모그래피를 확인한다."""
+    """Validate homography using independent geometric expectations."""
 
     def test_projective_corners_and_center(self) -> None:
         c = Calibration([[0,0],[.5,0],[1,1],[0,1]],(201,151))
@@ -44,14 +44,14 @@ class CoordinateTests(unittest.TestCase):
 
 
 class StateTests(unittest.TestCase):
-    """획 경계·도구 우선순위·일회성 이벤트 검증."""
+    """Validate stroke boundaries, tool priorities, and one-shot events."""
 
     def setUp(self) -> None:
         self.settings = Settings()
         self.c = UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),self.settings)
 
     def frame(self, *gestures: str, position: tuple | None = (.5,.5), suppressed: bool = False, now: float = 1.) -> object:
-        """동일 시각 기준의 테스트 프레임."""
+        """Test frames with a common time reference."""
         return self.c.update(InputState(position,frozenset(gestures)),now,suppressed)
 
     def test_strokes_and_tracking_loss(self) -> None:
@@ -100,7 +100,7 @@ class StateTests(unittest.TestCase):
         self.assertTrue(self.frame('TOUCH').active)
 
     def test_held_toggle_requires_new_gesture(self) -> None:
-        """형광펜 토글은 유지 중 한 번만 적용되고 새 동작으로 펜에 복귀한다."""
+        """Highlighter toggles only once per held gesture; a new event switches back to pen."""
         self.settings.mapping['POINTER'] = 'toggle_highlighter'
         self.assertEqual(self.frame('POINTER').tool, 'highlighter')
         self.assertEqual(self.frame('POINTER').tool, 'highlighter')
@@ -108,7 +108,7 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.frame('POINTER').tool, 'pen')
 
     def test_settings_panel_preserves_mapping(self) -> None:
-        """설정 화면은 매핑을 바꾸지 않고 별도 배경에 안내를 표시한다."""
+        """The settings screen displays instructions on a separate background without changing mappings."""
         image = np.zeros((540,960,3),np.uint8)
         before = self.settings.mapping.copy()
         draw_settings(image,self.settings.mapping,0)
@@ -117,7 +117,7 @@ class StateTests(unittest.TestCase):
         self.assertTrue(np.any(image[:150] == 255))
 
     def test_reset_calibration_persists_and_requires_lift(self) -> None:
-        """리셋 후 기본 꼭짓점·현재 크기를 저장하고 누른 채 필기 재개를 막는다."""
+        """After reset, save default corners and current dimensions; block drawing until the pen is released."""
         self.c.calibration = Calibration([[0,0],[1,0],[1,1],[0,1]],(1280,720))
         self.frame('POINTER')
         renderer = PreviewRenderer((1280,720))
@@ -134,7 +134,7 @@ class StateTests(unittest.TestCase):
         self.assertTrue(self.frame('POINTER').active)
 
     def test_footer_is_outside_ink(self) -> None:
-        """필기와 카메라를 보존하고 별도의 불투명 상태줄을 덧붙인다."""
+        """Preserve ink and camera panels while adding a separate opaque status bar."""
         camera = np.full((480,640,3), 80, np.uint8)
         slide = np.full((540,960,3), 255, np.uint8)
         screen = compose_screen(camera, slide, 2, 'pen', 'NEXT: 1 -> 2')
@@ -171,10 +171,10 @@ class StateTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
-    """설정 JSON 검증과 사용자 설정 우선 로드."""
+    """Validate settings JSON and give user settings precedence."""
 
     def test_empty_user_mapping_falls_back_and_cannot_be_saved(self) -> None:
-        """빈 개인 매핑은 기본값으로 복구하고 빈 매핑 저장은 거부한다."""
+        """Recover an empty personal mapping from defaults and reject saving an empty mapping."""
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root/'config').mkdir()
