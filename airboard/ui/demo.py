@@ -355,10 +355,10 @@ def main() -> None:
                     frame = cv2.flip(frame,1)
                     h,w = frame.shape[:2]
                     hands = tracker.detect(frame)
-                    # 매핑에 따라 인식기 판정을 켜고 끈다 (설정 화면에서 바꾸면 바로 반영)
-                    #  - 검지로 쓰기: 검지 자세 유지와 ✌️ 인식
-                    #  - ✌️를 멈춤 말고 다른 동작에 연결: ✌️ 인식 (멈춤은 검지로 쓸 때만 의미가 있다)
-                    #  - 핀치로 쓰기: 손가락이 벌어지기 시작하면 잉크 멈춤 (지우개 등으로 쓸 때는 끈다)
+                    # Enable or disable recognizer decisions based on the active gesture mapping (applied immediately after settings changes)
+                    #  - Index-finger writing: recognize the held index pose and two-finger gesture
+                    #  - If two fingers are mapped to an action other than stop, recognize that gesture (stop matters only for index-based writing)
+                    #  - Pinch writing: stop inking as the fingers start opening (disable this when another pose is mapped to drawing)
                     recognizer.config['index_writing'] = settings.mapping.get('POINTER') == 'draw'
                     recognizer.config['two_fingers'] = settings.mapping.get('TWO_FINGERS','none') not in ('none','stop')
                     recognizer.config['pinch_writing'] = settings.mapping.get('PINCH') == 'draw'
@@ -451,7 +451,7 @@ def main() -> None:
                     if 'draw' not in settings.mapping.values():
                         message = 'SAVE BLOCKED: choose a held gesture and assign DRAW.'
                 elif key in (left,right):
-                    # 이 제스처에 의미 있는 동작만 돌아가며 고른다. draw는 여러 제스처에 지정할 수 있다.
+                    # Cycle through valid actions for this gesture; drawing can be assigned to multiple gestures.
                     name = names[row]
                     choices = allowed_actions(name)
                     current = settings.mapping[name]
@@ -502,7 +502,7 @@ def main() -> None:
             elif key in (left,right):
                 message = move_page(-1 if key==left else 1)
             elif key in (ord('['),ord(']')):
-                # 글씨 크기 30~100% 조절 (이번 실행에만 적용, 기본값은 config의 ui.writing_scale)
+                # Adjust writing scale from 30% to 100% for this run only; the default is ui.writing_scale in config.
                 step = -.1 if key==ord('[') else .1
                 controller.writing_scale = round(min(1.,max(.3,controller.writing_scale+step)),1)
                 message = f'Text size {round(controller.writing_scale*100)}%'
