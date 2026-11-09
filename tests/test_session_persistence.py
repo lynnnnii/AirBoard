@@ -1,4 +1,4 @@
-"""재실행 후 페이지·편집 이력 복원과 개인 저장 분리를 검증한다."""
+"""Verify page/edit-history restoration and separation of per-document session data."""
 from pathlib import Path
 import json
 import tempfile
@@ -13,7 +13,7 @@ from airboard.ui.controller import RenderPacket
 
 class PersistenceTests(unittest.TestCase):
     def setUp(self):
-        """내용이 다른 동명 PDF를 준비한다."""
+        """Prepare PDFs with identical names but different contents."""
         self.temp=tempfile.TemporaryDirectory()
         self.root=Path(self.temp.name)
         self.path=self.root/'source.pdf'
@@ -32,7 +32,7 @@ class PersistenceTests(unittest.TestCase):
         return PDFRenderer(str(path or self.path),self.cfg,state_dir=self.state)
 
     def test_restore_all_pages_eraser_clear_and_undo(self):
-        """페이지별 색상·투명도·지우개·전체 지우기와 마지막 페이지를 검증한다."""
+        """Verify per-page color, opacity, erasing, clearing, and last visited page."""
         original=self.path.read_bytes()
         r=self.open(); b=r.board
         b.commit_stroke([(20,50),(200,50)],'pen',color='#00FF00',width=8)
@@ -57,7 +57,7 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(),original)
 
     def test_close_saves_active_stroke(self):
-        """펜을 든 상태가 아니어도 종료 직전 획을 저장한다."""
+        """Save an active stroke on shutdown even if pen-up has not occurred."""
         r=self.open()
         for p,phase in [((20,60),'down'),((150,60),'move')]:
             r.consume(RenderPacket(p,'pen',True,phase,'#FF0000',8,1.,()))
@@ -70,7 +70,7 @@ class PersistenceTests(unittest.TestCase):
             r.close()
 
     def test_same_filename_different_pdf_isolated(self):
-        """이름이 같아도 내용이 다른 PDF는 별도 상태로 저장한다."""
+        """Store distinct session states for PDFs with the same name but different contents."""
         r=self.open(); key=r.state_path
         r.change_page(1); r.close()
         other=self.root/'other/source.pdf'; other.parent.mkdir()
@@ -86,7 +86,7 @@ class PersistenceTests(unittest.TestCase):
             r.close()
 
     def test_invalid_state_does_not_replace_live_or_saved_ink(self):
-        """잘못된 저장을 거부하고 쓰기 실패에도 기존 정상 저장을 유지한다."""
+        """Reject corrupt sessions and preserve valid saves on write failures."""
         r=self.open(); b=r.board
         b.commit_stroke([(40,40)])
         b.save_session(r.state_path)
