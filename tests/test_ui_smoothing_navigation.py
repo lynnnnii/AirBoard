@@ -1,6 +1,6 @@
-"""PDF 보정 연결과 도구/페이지 제스처 충돌 방지를 검사한다."""
+"""Test PDF smoothing integration and avoidance of tool/page gesture conflicts."""
 import os
-os.environ.setdefault('AIRBOARD_USER_SETTINGS', os.path.join(os.path.dirname(__file__), '_no_user_settings.json'))  # 개인 설정 없이 팀 기본값으로 검사
+os.environ.setdefault('AIRBOARD_USER_SETTINGS', os.path.join(os.path.dirname(__file__), '_no_user_settings.json'))  # Test with team defaults instead of personal settings
 from pathlib import Path
 import tempfile
 import unittest
@@ -18,7 +18,7 @@ from airboard.gestures.gesture import SwipeDetector, PinchDetector
 
 class SmoothingConnectionTests(unittest.TestCase):
     def test_tail_trim_is_saved_after_mid_stroke_checkpoint(self):
-        """진행 획 저장 후 펜을 떼면 꼬리 제거 결과로 저장이 갱신된다."""
+        """After checkpointing an active stroke, pen-up updates the save with the trimmed final result."""
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); path=root/'source.pdf'
             with pymupdf.open() as doc:
@@ -30,7 +30,7 @@ class SmoothingConnectionTests(unittest.TestCase):
             for i in range(10):
                 r.consume(RenderPacket((20+i*10,70),'pen',True,'down' if i==0 else 'move','#FF0000',4,1.,()))
             self.assertFalse(np.array_equal(r.board.render_page()[70,100],bg[70,100]))
-            # 긴 획 중 저장이 이미 수행된 상황을 만든다.
+            # Simulate a checkpoint performed during a long stroke.
             r.checkpoint(force=True)
             r.consume(RenderPacket(None,'pen',False,'up','#FF0000',4,1.,()))
             np.testing.assert_array_equal(r.board.render_page()[70,100],bg[70,100])
@@ -40,7 +40,7 @@ class SmoothingConnectionTests(unittest.TestCase):
             saved.close(); r.close()
 
     def test_pdf_cursor_reduces_jitter(self):
-        """실제 PDF 어댑터에 연결된 EMA 커서의 정지 떨림이 줄어든다."""
+        """An EMA cursor wired to the real PDF adapter reduces stationary jitter."""
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'source.pdf'
             with pymupdf.open() as doc:
@@ -58,7 +58,7 @@ class SmoothingConnectionTests(unittest.TestCase):
                 r.close()
 
     def test_smoothing_flush_preserves_highlighter_and_eraser(self):
-        """보정 모드의 페이지 이동·종료 시 형광펜과 지우개 작업을 유실하지 않는다."""
+        """Preserve highlighter and eraser operations during navigation and shutdown in smoothing mode."""
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); path=root/'source.pdf'
             with pymupdf.open() as doc:
@@ -89,7 +89,7 @@ class NavigationTests(unittest.TestCase):
         return UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
 
     def test_tool_transition_and_clap_block_page_event(self):
-        """필기·포인터·박수 직후 페이지 이벤트를 무시하고 안정 후 허용한다."""
+        """Ignore page events immediately after drawing, pointing, or clapping, then allow after stabilization."""
         c=self.controller()
         frame=lambda t,*g:c.update(InputState((.5,.5),frozenset(g)),t)
         frame(0,'PINCH'); frame(.1)
@@ -100,7 +100,7 @@ class NavigationTests(unittest.TestCase):
         self.assertEqual(frame(2.2,'SWIPE_LEFT','SWIPE_RIGHT').commands,())
 
     def test_two_hands_and_pointer_cannot_navigate(self):
-        """인식기에서 페이지 이벤트가 섞여 와도 양손·포인터에서는 막는다."""
+        """Block page events during two-hand or pointer gestures even if the recognizer emits them."""
         c=self.controller()
         result=SimpleNamespace(hands=[object(),object()],pose='OPEN',pen_down=False,
                                pen_point=(50,50),pointer_point=(50,50),events=['SWIPE_RIGHT'])
@@ -111,7 +111,7 @@ class NavigationTests(unittest.TestCase):
         self.assertEqual(c.update(from_gesture_result(result,(100,100)),2).commands,())
 
     def test_swipe_does_not_reuse_tool_movement(self):
-        """이전 펼친 손과 도구 동작의 이동을 이어 스와이프로 판정하지 않는다."""
+        """Do not combine old open-hand motion with tool movement to create a false swipe."""
         detector=SwipeDetector()
         detector.update((10,50),True,100,100,0)
         detector.update((20,50),True,100,100,.1)
@@ -123,7 +123,7 @@ class NavigationTests(unittest.TestCase):
 
 
     def test_relaxed_open_hand_event_is_not_discarded(self):
-        """네 손가락 모두 OPEN이 아니어도 인식기가 승인한 스와이프를 허용한다."""
+        """Allow recognizer-approved swipes even if not all four fingers are classified OPEN."""
         c=self.controller()
         result=SimpleNamespace(hands=[object()],pose='NONE',pen_down=False,
                                pen_point=(50,50),pointer_point=(50,50),events=['SWIPE_RIGHT'])
@@ -132,7 +132,7 @@ class NavigationTests(unittest.TestCase):
         self.assertEqual(c.update(state,0).commands,())
 
     def test_short_open_hand_detection_gap_is_tolerated(self):
-        """짧은 손가락 추정 흔들림은 무시하지만 그 프레임의 좌표는 쓰지 않는다."""
+        """Tolerate brief finger-state jitter but do not use those frames' coordinates."""
         d=SwipeDetector()
         d.update((10,50),True,100,100,0)
         d.update((18,50),True,100,100,.04)
@@ -140,7 +140,7 @@ class NavigationTests(unittest.TestCase):
         self.assertEqual(d.update((35,50),True,100,100,.1),'SWIPE_RIGHT')
 
     def test_swipe_after_short_quiet_window_is_delivered_once(self):
-        """직전 도구 차단이 끝나기 전 발생한 단발 이벤트를 한 번 전달한다."""
+        """Forward an event once even if it began before a tool-action guard ended."""
         c=self.controller()
         c.update(InputState((.5,.5),frozenset({'PINCH'})),0)
         c.update(InputState((.5,.5)),.1)
@@ -150,7 +150,7 @@ class NavigationTests(unittest.TestCase):
         self.assertEqual(c.update(InputState((.5,.5)),.4).commands,())
 
     def test_passive_palette_does_not_swallow_swipe(self):
-        """팔레트를 지나가는 것과 설정 모드 차단을 구별한다."""
+        """Differentiate passing over the palette from blocking in settings mode."""
         c=self.controller()
         state=InputState((.2,.03),frozenset({'SWIPE_RIGHT'}))
         self.assertEqual(c.update(state,0,suppressed=True,navigation_suppressed=False).commands,())
@@ -158,7 +158,7 @@ class NavigationTests(unittest.TestCase):
         self.assertEqual(c.update(state,0,suppressed=True,navigation_suppressed=True).commands,())
 
     def test_pending_page_is_cancelled_by_tool_or_hand_loss(self):
-        """보관된 이벤트가 있더라도 필기 또는 손 소실이 끼면 취소한다."""
+        """Cancel pending events if drawing or tracking loss intervenes."""
         for blocked in (InputState((.5,.5),frozenset({'PINCH'})),InputState(None,navigation_allowed=False)):
             c=self.controller()
             c.update(InputState((.5,.5),frozenset({'PINCH'})),0)
@@ -168,7 +168,7 @@ class NavigationTests(unittest.TestCase):
             self.assertEqual(c.update(InputState((.5,.5)),.8).commands,())
 
     def test_relaxed_finger_geometry_generates_page_event(self):
-        """MCP 거리비가 작아도 PIP보다 펼친 손가락이 충분하면 인식한다."""
+        """Recognize sufficient finger extension past PIP despite a small MCP distance ratio."""
         from airboard.gestures.gesture import GestureRecognizer
         r=GestureRecognizer()
         hand=np.zeros((21,3),np.float32)
@@ -185,7 +185,7 @@ class NavigationTests(unittest.TestCase):
         self.assertNotIn('SWIPE_RIGHT',result.events)
 
     def test_faster_swipe_profile_uses_shorter_distance(self):
-        """UI 프로필은 짧은 이동을 인식하며 박수 차단 설정은 바꾸지 않는다."""
+        """UI profile detects short movement without modifying clap suppression settings."""
         import json
         from airboard.ui.settings import ROOT
         cfg=json.loads((ROOT/'config/default.json').read_text(encoding='utf-8'))['gestures']
@@ -194,23 +194,23 @@ class NavigationTests(unittest.TestCase):
         self.assertIsNone(d.update((18,50),True,100,100,.05))
         self.assertEqual(d.update((26,50),True,100,100,.1),'SWIPE_RIGHT')
         self.assertIsNone(d.update((70,50),True,100,100,.2))
-        # 반대 방향은 swipe_reverse_guard(1초)가 지난 뒤에 인식한다 (되돌리는 동작 무시)
+        # Recognize the opposite direction only after swipe_reverse_guard (1 s), ignoring return motion
         self.assertIsNone(d.update((70,50),True,100,100,1.2))
         self.assertIsNone(d.update((62,50),True,100,100,1.25))
         self.assertEqual(d.update((54,50),True,100,100,1.3),'SWIPE_LEFT')
 
     def test_return_motion_after_swipe_is_ignored(self):
-        """스와이프 직후 손을 되돌리는 반대 방향 이동은 무시하고, 같은 방향 연속 스와이프는 허용한다."""
+        """Ignore opposite-direction return movement after a swipe while allowing repeated same-direction swipes."""
         import json
         from airboard.ui.settings import ROOT
         cfg=json.loads((ROOT/'config/default.json').read_text(encoding='utf-8'))['gestures']
         d=SwipeDetector(cfg)
         events=[]
-        # 오른쪽으로 쓸고(0~0.1초) 0.6~0.75초에 제자리로 되돌림
+        # Swipe right at 0–0.1 s and return to the original position at 0.6–0.75 s
         for t,x in ((0,10),(.05,18),(.1,30),(.6,30),(.65,22),(.7,14),(.75,6)):
             events.append(d.update((x,50),True,100,100,t))
         self.assertEqual([e for e in events if e],['SWIPE_RIGHT'])
-        # 같은 방향은 재입력 대기(0.45초)만 지나면 다시 인식
+        # Recognize another same-direction swipe after only the 0.45 s cooldown
         for t,x in ((.9,6),(.95,14),(1.,26)):
             events.append(d.update((x,50),True,100,100,t))
         self.assertEqual([e for e in events if e],['SWIPE_RIGHT','SWIPE_RIGHT'])
@@ -221,7 +221,7 @@ class PinchReliabilityTests(unittest.TestCase):
         return PinchDetector({'pinch_on':.20,'pinch_off':.32,'pinch_on_frames':3,'pinch_off_frames':1})
 
     def test_brief_false_contact_is_ignored_and_release_is_fast(self):
-        """순간 오인식은 무시하고 지속 접촉만 쓰며 손을 떼면 즉시 멈춘다."""
+        """Ignore transient false recognition, draw only during stable contact, and stop immediately on release."""
         d=self.detector()
         for ratio in (.1,.1,.4,.1,.4):
             self.assertFalse(d.update(ratio))
@@ -231,7 +231,7 @@ class PinchReliabilityTests(unittest.TestCase):
         self.assertFalse(d.update(.4))
 
     def test_loss_or_fist_requires_open_before_new_pinch(self):
-        """손 소실/주먹 뒤에는 손가락을 벌린 뒤 새로 접촉해야 쓴다."""
+        """After tracking loss or a fist, require opening fingers before a new drawing pinch."""
         for blocked in (False,True):
             with self.subTest(blocked=blocked):
                 d=self.detector()
@@ -243,7 +243,7 @@ class PinchReliabilityTests(unittest.TestCase):
                 self.assertTrue(d.update(.1))
 
     def test_rotating_pinch_distance_spikes_do_not_split_stroke(self):
-        """로그의 일시적 해제 비율 상승 뒤 복귀를 지속 필기로 처리한다."""
+        """Treat brief pinch-ratio spikes followed by recovery as continuous drawing."""
         import json
         from airboard.ui.settings import ROOT
         cfg=json.loads((ROOT/'config/default.json').read_text(encoding='utf-8'))['gestures']
@@ -258,7 +258,7 @@ class PinchReliabilityTests(unittest.TestCase):
 
 class HandwritingEndpointTests(unittest.TestCase):
     def test_ui_handwriting_profile_does_not_cut_stroke_ends(self):
-        """UI 필기 설정은 짧은 획의 시작과 끝을 자동 삭제하지 않는다."""
+        """UI stroke settings must not automatically trim the start and end of short strokes."""
         options=dict(Settings().ui['handwriting_smoothing'],method='none')
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'source.pdf'
