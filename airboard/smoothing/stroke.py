@@ -76,7 +76,7 @@ def densify(points: list[Point]) -> list[Point]:
 
 
 def load_config(path: str = DEFAULT_CONFIG) -> dict[str, Any]:
-    """The "smoothing" section of config/default.json 항목을 기본값 위에 덮어써서 돌려준다."""
+    """Overlay the config/default.json smoothing section onto the default settings."""
     with open(path, encoding="utf-8") as f:
         section = json.load(f).get("smoothing", {})
     return {**DEFAULTS, **section}
