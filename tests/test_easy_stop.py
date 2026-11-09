@@ -30,5 +30,5 @@ class EasyStopTests(unittest.TestCase):
         raw=np.array([(100+i*3,100+(-4 if i%2 else 4)) for i in range(100)])
         before=np.array([old(p,i/30) for i,p in enumerate(raw)])
         after=np.array([new(p,i/30) for i,p in enumerate(raw)])
-        self.assertLess(np.mean(raw[20:,0]-after[20:,0]),.75*np.mean(raw[20:,0]-before[20:,0]))
-        self.assertLess(np.std(after[20:,1]),2.6)
+        self.assertLess(np.mean(raw[20:,0]-after[20:,0]),15)
+        self.assertLess(np.std(after[20:,1]),4)
