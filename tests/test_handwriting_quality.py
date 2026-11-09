@@ -1,6 +1,6 @@
-"""직선 떨림과 펜 해제 구간의 획 분리를 검증한다."""
+"""Verify jitter suppression on straight lines and stroke separation on pen release."""
 import os
-os.environ.setdefault('AIRBOARD_USER_SETTINGS', os.path.join(os.path.dirname(__file__), '_no_user_settings.json'))  # 개인 설정 없이 팀 기본값으로 검사
+os.environ.setdefault('AIRBOARD_USER_SETTINGS', os.path.join(os.path.dirname(__file__), '_no_user_settings.json'))  # Test with team defaults rather than personal settings
 import json
 import unittest
 from unittest.mock import patch
@@ -15,7 +15,7 @@ class HandwritingQualityTests(unittest.TestCase):
         return json.loads((ROOT/'config/default.json').read_text(encoding='utf-8'))
 
     def test_moving_straight_line_reduces_sideways_noise_with_bounded_lag(self):
-        """수평 이동 중 수직 떨림을 줄이면서 진행 방향 지연을 제한한다."""
+        """Reduce vertical jitter during horizontal motion while limiting directional lag."""
         cfg=Settings().ui['handwriting_smoothing']
         f=OneEuroFilter(cfg['one_euro_min_cutoff'],cfg['one_euro_beta'])
         raw=np.array([(50+i*3,80+(4 if i%2 else -4)) for i in range(100)],float)
@@ -26,7 +26,7 @@ class HandwritingQualityTests(unittest.TestCase):
         self.assertLess(np.mean(raw[20:,0]-filtered[20:,0]),15)
 
     def test_pending_release_freezes_endpoint_without_breaking_contact(self):
-        """해제 확인 중 이동은 획에 넣지 않고 오판이면 이어 쓴다."""
+        """Do not ink movement during release confirmation; continue if the release was a false positive."""
         r=GestureRecognizer(self.config()['gestures'])
         hand=np.zeros((21,3),np.float32)
         hand[:,0]=100;hand[:,1]=50;hand[0,1]=80
@@ -43,7 +43,7 @@ class HandwritingQualityTests(unittest.TestCase):
         self.assertFalse(frame(300,.45,.5).pen_down)
 
     def test_opening_fingers_stops_ink_before_pen_up(self):
-        """손가락이 벌어지기 시작하면(pinch_hold 초과) 펜이 들리기 전이라도 잉크를 늘리지 않는다."""
+        """Stop adding ink when fingers start separating (above pinch_hold), even before pen-up."""
         r=GestureRecognizer(self.config()['gestures'])
         hand=np.zeros((21,3),np.float32)
         hand[:,0]=100;hand[:,1]=50;hand[0,1]=80
@@ -53,14 +53,14 @@ class HandwritingQualityTests(unittest.TestCase):
                 return r.update([h],640,480,t)
         for i in range(3): result=frame(100,.1,i*.05)
         start=result.pen_point
-        for i,x in enumerate((140,180)):       # 0.32: pinch_off(0.38)보다 작아 아직 쓰는 중
+        for i,x in enumerate((140,180)):       # 0.32: Still drawing because the ratio is below pinch_off (0.38)
             lifting=frame(x,.32,.2+i*.05)
             self.assertTrue(lifting.pen_down)
             self.assertEqual(lifting.pen_point,start)
-        self.assertNotEqual(frame(200,.1,.3).pen_point,start)   # 다시 붙이면 계속 쓴다
+        self.assertNotEqual(frame(200,.1,.3).pen_point,start)   # Continue drawing if fingertips touch again
 
     def test_clear_release_ends_stroke_on_first_frame(self):
-        """확실하게 벌린 손은 두 프레임 대기 없이 획을 끝낸다."""
+        """A clearly opened hand ends the stroke immediately without waiting two frames."""
         d=PinchDetector(self.config()['gestures'])
         for _ in range(3):d.update(.1)
         self.assertTrue(d.down)
