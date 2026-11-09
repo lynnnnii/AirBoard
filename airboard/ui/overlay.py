@@ -1,4 +1,4 @@
-"""OpenCV 이미지 위에 커서·팔레트·알림을 그린다."""
+"""Draw cursors, palettes, and notifications on OpenCV images."""
 import math
 import time
 import cv2
@@ -8,12 +8,12 @@ from .settings import Settings
 
 
 def bgr(color: str) -> tuple[int,int,int]:
-    """#RRGGBB를 OpenCV BGR로 바꾼다."""
+    """Convert #RRGGBB to OpenCV BGR."""
     return tuple(int(color[i:i+2],16) for i in (5,3,1))
 
 
 def draw_sparkle(image: np.ndarray, p: tuple[int,int], now: float) -> None:
-    """레이저 포인터 커서: 빛 번짐 + 밝은 심 + 회전하며 깜빡이는 별빛. 커서 주변 영역만 계산한다."""
+    """Laser cursor with glow, bright center, and rotating twinkles; render only near the cursor."""
     r = 36
     h,w = image.shape[:2]
     x0,y0,x1,y1 = max(0,p[0]-r),max(0,p[1]-r),min(w,p[0]+r+1),min(h,p[1]+r+1)
@@ -21,14 +21,14 @@ def draw_sparkle(image: np.ndarray, p: tuple[int,int], now: float) -> None:
         return
     roi = image[y0:y1,x0:x1]
     c = (p[0]-x0,p[1]-y0)
-    pulse = .5+.5*math.sin(now*8)                     # 초당 약 1.3번 숨 쉬듯 밝아졌다 어두워짐
-    # 빛 번짐: 흐린 원 마스크로 색을 섞어 흰 슬라이드 위에서도 보이게 한다.
+    pulse = .5+.5*math.sin(now*8)                     # Pulse in brightness approximately 1.3 times per second
+    # Glow: blend a blurred circular mask so the pointer remains visible on white slides.
     mask = np.zeros(roi.shape[:2],np.float32)
     cv2.circle(mask,c,round(10+5*pulse),1.,-1,cv2.LINE_AA)
     a = cv2.GaussianBlur(mask,(0,0),6)[...,None]*(.55+.25*pulse)
     roi[:] = np.rint(roi*(1-a)+np.array((40,40,255),np.float32)*a).astype(np.uint8)
     spin = now*2.5
-    for k in range(8):                                # 긴 십자 빛 4개 + 짧은 대각선 빛 4개
+    for k in range(8):                                # Four long cardinal rays and four short diagonal rays
         ang = spin+k*math.pi/4
         length = (20+10*pulse) if k%2==0 else (10+5*pulse)
         tip = (round(c[0]+length*math.cos(ang)),round(c[1]+length*math.sin(ang)))
@@ -38,7 +38,7 @@ def draw_sparkle(image: np.ndarray, p: tuple[int,int], now: float) -> None:
 
 
 class Overlay:
-    """일정 시간 머무르기 팔레트. 상태는 UI 인스턴스 안에서만 유지."""
+    """Dwell-based palette; keep state within the UI instance."""
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.target,self.since,self.done = None,0.,False
@@ -50,7 +50,7 @@ class Overlay:
             self.cells.append((offset+i*65,8,offset+58+i*65,46,'width',w))
 
     def dwell(self, position: tuple | None, now: float) -> tuple | None:
-        """팔레트 진입을 감지하고 시간 충족 시 한 번만 선택을 반환."""
+        """Detect palette entry and return a single selection after the dwell threshold."""
         target = next(((k,v) for a,b,c,d,k,v in self.cells if position is not None and a<=position[0]<c and b<=position[1]<d),None)
         if target != self.target:
             self.target,self.since,self.done = target,now,False
@@ -60,10 +60,10 @@ class Overlay:
         return None
 
     def draw(self, image: object, packet: RenderPacket, notice: str = '') -> None:
-        """전달받은 이미지를 수정; 창 생성/입력 처리는 호출자가 담당."""
+        """Modify the provided image; the caller handles window creation and input."""
         for a,b,c,d,k,v in self.cells:
             if k == 'width':
-                # 굵기 선택 칸만 4배로 그린 뒤 축소해 가장자리를 부드럽게 한다.
+                # Draw only the width-selector cell at 4x resolution and downsample for smooth edges.
                 scale = 4
                 cell_w,cell_h = c-a+1,d-b+1
                 tile = np.full((cell_h*scale,cell_w*scale,3),(35,35,35),np.uint8)
