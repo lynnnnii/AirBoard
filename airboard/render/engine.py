@@ -472,7 +472,7 @@ class AirBoardRenderer:
                 canvas = self._canvas(index)
                 success, encoded = cv2.imencode('.png', canvas.composed)
                 if not success:
-                    raise OSError('페이지 PNG encoding failed')
+                    raise OSError('Page PNG encoding failed')
                 rect = self.doc[index].rect
                 page = output.new_page(width=rect.width, height=rect.height)
                 page.insert_image(page.rect, stream=encoded.tobytes(), keep_proportion=False)
