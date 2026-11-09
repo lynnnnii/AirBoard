@@ -1,8 +1,8 @@
 """
-제스처 판정 디버그 화면 (담당: Kim Hyunbo)
+Gesture recognition debug view (contributor: Kim Hyunbo)
 
-실행: python -m airboard.gestures.debug
-웹캠으로 손 인식·제스처 판정 결과를 확인한다. q 또는 ESC로 종료.
+Run: python -m airboard.gestures.debug
+Inspect webcam hand tracking and gesture recognition; press q or Esc to quit.
 """
 
 import os
@@ -19,12 +19,12 @@ HAND_EDGES = [(0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8),
               (13, 17), (17, 18), (18, 19), (19, 20), (0, 17)]
 
 POSE_COLOR = {"PINCH": (0, 0, 255), "FIST": (255, 0, 255), "POINTER": (0, 200, 255),
-              "OPEN": (0, 255, 0), "NONE": (0, 255, 0)}   # PEN=빨강, ERASER=보라, POINTER=주황, PEN STOP=초록
+              "OPEN": (0, 255, 0), "NONE": (0, 255, 0)}   # PEN=red, ERASER=purple, POINTER=orange, PEN STOP=green
 
 
 class ToolState:
-    """현재 필기 도구 (PEN / HIGHLIGHTER). 박수 두 번(DOUBLE_CLAP)마다 서로 전환.
-    렌더링 담당도 이 클래스를 그대로 가져다 쓰면 된다: tool.update(result.events) -> tool.name"""
+    """Current drawing tool (PEN / HIGHLIGHTER); toggle on DOUBLE_CLAP.
+    Rendering modules can also use this class: tool.update(result.events) -> tool.name"""
 
     def __init__(self):
         self.name = "PEN"
@@ -39,10 +39,10 @@ class ToolState:
 
 
 def display_label(r, tool_name="PEN", flash=None):
-    """화면 표시용 이름.
-    엄지·검지 붙임 = PEN, 뗌 = PEN STOP, 주먹 = ERASER, 검지만 = POINTER.
-    박수 두 번으로 형광펜 모드가 되면 (주먹·포인터가 아닐 때) HIGHLIGHTER.
-    스와이프 직후에는 잠깐 NEXT PAGE / PREV PAGE."""
+    """Display name for the current gesture state.
+    Pinch thumb and index = PEN; release = PEN STOP; fist = ERASER; index only = POINTER.
+    After toggling by double clap, show HIGHLIGHTER unless fist/pointer is active.
+    After swipes, briefly display NEXT PAGE / PREV PAGE."""
     if flash:
         return flash
     if r.pose == "FIST":
@@ -79,20 +79,20 @@ def draw_debug(frame, r, fps, flash=None, tool=None):
 
 def main():
     if not os.path.exists(DEFAULT_MODEL):
-        print("[오류] models/hand_landmarker.task 파일이 없습니다.")
+        print("[Error] Missing models/hand_landmarker.task.")
         return
-    print("모델 불러오는 중...")
+    print("Loading model...")
     tracker = HandTracker()
     rec = GestureRecognizer()
-    print("카메라 여는 중...")
+    print("Opening camera...")
     cap = open_camera(0)
     if cap is None:
-        print("[오류] 카메라를 열 수 없습니다. 다른 프로그램(줌, 카메라 앱 등)이 쓰고 있는지,")
-        print("       윈도우 설정 > 개인 정보 > 카메라에서 데스크톱 앱 접근이 켜져 있는지 확인하세요.")
-        print("       외장 웹캠이면 open_camera(0)의 0을 1로 바꿔보세요.")
+        print("[Error] Could not open the camera. Check whether Zoom or another camera app is using it,")
+        print("       and enable desktop-app camera permissions in Windows Settings > Privacy > Camera.")
+        print("       For an external webcam, try changing open_camera(0) to open_camera(1).")
         return
-    print("실행 중입니다. 'AirBoard gesture debug' 창에서 q 또는 ESC를 누르면 종료됩니다.")
-    flash_text, flash_until = None, 0.0   # 스와이프 직후 MODE에 잠깐 표시할 글자
+    print("Running. Press q or Esc in the 'AirBoard gesture debug' window to quit.")
+    flash_text, flash_until = None, 0.0   # Text briefly displayed in MODE after a swipe
     tool = ToolState()
     prev = time.monotonic()
     fps = 0.0
@@ -100,14 +100,14 @@ def main():
         ok, frame = cap.read()
         if not ok:
             break
-        frame = cv2.flip(frame, 1)      # 거울 모드
+        frame = cv2.flip(frame, 1)      # Mirrored camera view
         now = time.monotonic()
         r = rec.update(tracker.detect(frame), frame.shape[1], frame.shape[0], now)
 
         fps = 0.9 * fps + 0.1 * (1.0 / max(now - prev, 1e-6))
         prev = now
         for e in r.events:
-            print(f"[{now:.2f}] EVENT {e}")      # 터미널에만 기록
+            print(f"[{now:.2f}] EVENT {e}")      # Log only to the terminal
             if e == "SWIPE_RIGHT":
                 flash_text, flash_until = "NEXT PAGE", now + CFG["mode_flash"]
             elif e == "SWIPE_LEFT":
