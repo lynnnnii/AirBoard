@@ -1,10 +1,10 @@
 """
-좌표 떨림 보정 필터 (담당: Lee Subin)
+Coordinate jitter smoothing filters (contributor: Lee Subin)
 
-모두 2D 좌표 (x, y)와 시각 t(초)를 받아 보정된 좌표를 돌려준다.
-  - NoFilter      : 보정 없음 (비교·--no-smoothing 용)
-  - EMAFilter     : 지수이동평균. 단순하지만 손이 빠르면 늦게 따라온다.
-  - OneEuroFilter : 손이 느리면 강하게, 빠르면 약하게 보정해 떨림과 지연을 같이 줄인다.
+Each filter accepts 2D coordinates (x, y) and time t (seconds), then returns smoothed coordinates.
+  - NoFilter      : No smoothing (for comparisons and --no-smoothing)
+  - EMAFilter     : Exponential moving average: simple, but lags behind fast hand movement.
+  - OneEuroFilter : Applies stronger smoothing when slow and weaker smoothing when fast, balancing jitter and lag.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import numpy as np
 
 
 class PointFilter(Protocol):
-    """필터 공통 형식."""
+    """Common filter interface."""
 
     def reset(self) -> None: ...
 
@@ -24,7 +24,7 @@ class PointFilter(Protocol):
 
 
 class NoFilter:
-    """보정 없이 그대로 돌려준다."""
+    """Return coordinates unchanged."""
 
     def reset(self) -> None:
         pass
@@ -34,7 +34,7 @@ class NoFilter:
 
 
 class EMAFilter:
-    """새 값에 alpha, 이전 값에 (1 - alpha) 가중치. alpha가 작을수록 부드럽지만 늦게 따라온다."""
+    """Weight the new value by alpha and the previous value by 1-alpha; lower alpha is smoother but increases lag."""
 
     def __init__(self, alpha: float = 0.3):
         self.alpha = alpha
@@ -50,17 +50,17 @@ class EMAFilter:
 
 
 def _smoothing_factor(cutoff: float, dt: float) -> float:
-    """차단 주파수(Hz)와 프레임 간격(초)으로 EMA 계수를 구한다."""
+    """Calculate the EMA coefficient from cutoff frequency (Hz) and frame interval (seconds)."""
     tau = 1.0 / (2 * math.pi * cutoff)
     return 1.0 / (1.0 + tau / dt)
 
 
 class OneEuroFilter:
-    """One Euro 필터 (Casiez et al., CHI 2012).
+    """One Euro filter (Casiez et al., CHI 2012).
 
-    min_cutoff(Hz): 낮출수록 멈춰 있을 때 떨림이 줄어든다.
-    beta: 높일수록 빠르게 움직일 때 늦게 따라오는 현상이 줄어든다. 속도(px/s)에 곱해지므로 좌표 단위에 따라 다시 맞춰야 한다.
-    d_cutoff(Hz): 속도 추정값을 다듬는 정도 (보통 1.0 고정).
+    min_cutoff(Hz): Lower values reduce jitter when stationary.
+    beta: Higher values reduce lag during fast motion; recalibrate for coordinate units since beta scales velocity (px/s).
+    d_cutoff(Hz): Smoothing of the velocity estimate (usually fixed at 1.0).
     """
 
     def __init__(self, min_cutoff: float = 1.0, beta: float = 0.01, d_cutoff: float = 1.0):
