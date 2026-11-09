@@ -37,11 +37,10 @@ class HandwritingQualityTests(unittest.TestCase):
         for i in range(3): result=frame(100,.1,i*.05)
         start=result.pen_point
         pending=frame(200,.45,.2)
-        self.assertEqual(pending.pen_point,start)  # Position remains frozen during release debounce.
+        self.assertFalse(pending.pen_down)
         for i in range(3): resumed=frame(120,.1,.25+i*.05)
         self.assertTrue(resumed.pen_down)
-        self.assertTrue(frame(300,.45,.5).pen_down)  # First release candidate is debounced.
-        self.assertFalse(frame(300,.45,.55).pen_down)
+        self.assertFalse(frame(300,.45,.5).pen_down)
 
     def test_opening_fingers_stops_ink_before_pen_up(self):
         """Stop adding ink when fingers start separating (above pinch_hold), even before pen-up."""

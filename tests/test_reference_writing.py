@@ -1,67 +1,80 @@
-"""Regression checks for the current pinch-writing and smoothing profile."""
+"""Reference-inspired writing: continuous short strokes and explicit release."""
+import json
+from pathlib import Path
 import tempfile
 import unittest
-from pathlib import Path
 import numpy as np
-from airboard.gestures.gesture import GestureRecognizer
+from airboard.gestures.gesture import IndexStrokeGate, GestureRecognizer
 from airboard.smoothing.stroke import StrokeSmoother
 from airboard.smoothing.filters import OneEuroFilter
 from airboard.ui.settings import Settings, ROOT
-from airboard.ui.controller import UIController, InputState
-from airboard.calibration import Calibration
 from tests.test_index_writing import hand
 
-
 class ReferenceWritingTests(unittest.TestCase):
-    def controller(self):
-        return UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
+    def test_ambiguous_pose_freezes_then_resumes(self):
+        gate=IndexStrokeGate()
+        gate.update('POINTER',(100.,100.),0,100)
+        self.assertEqual(gate.update('NONE',(180.,180.),.03,100),('POINTER',(100.,100.)))
+        self.assertEqual(gate.update('POINTER',(104.,102.),.06,100),('POINTER',(104.,102.)))
 
-    def test_pinch_draws(self):
-        p=self.controller().update(InputState((.5,.5),frozenset({'PINCH'})),0.)
-        self.assertEqual(p.phase,'down')
+    def test_grace_expires_without_extending_itself(self):
+        gate=IndexStrokeGate()
+        gate.update('POINTER',(100.,100.),0,100)
+        for t in (.02,.04,.06): self.assertEqual(gate.update('NONE',(150.,150.),t,100)[0],'POINTER')
+        self.assertEqual(gate.update('NONE',(150.,150.),.08,100)[0],'NONE')
 
-    def test_empty_pose_never_starts_ink(self):
-        p=self.controller().update(InputState((.5,.5),frozenset()),0.)
-        self.assertFalse(p.active)
+    def test_stop_and_tools_never_use_grace(self):
+        for pose in ('L_SHAPE','FIST','OPEN','PINCH'):
+            gate=IndexStrokeGate();gate.update('POINTER',(100.,100.),0,100)
+            self.assertEqual(gate.update(pose,(120.,120.),.01,100)[0],pose)
+            self.assertEqual(gate.update('NONE',(150.,150.),.02,100)[0],'NONE')
 
-    def test_stop_lifts_pen_immediately(self):
-        c=self.controller();c.update(InputState((.5,.5),frozenset({'PINCH'})),0)
-        p=c.update(InputState((.6,.6),frozenset({'PINCH','TWO_FINGERS'})),.1)
-        self.assertEqual(p.phase,'up')
+    def test_busy_or_loss_clears_grace(self):
+        for point,blocked in [(None,False),((120.,120.),True)]:
+            gate=IndexStrokeGate();gate.update('POINTER',(100.,100.),0,100)
+            gate.update('NONE',point,.01,100,blocked)
+            self.assertEqual(gate.update('NONE',(150.,150.),.02,100)[0],'NONE')
 
-    def test_pointer_does_not_draw(self):
-        p=self.controller().update(InputState((.5,.5),frozenset({'POINTER'})),0)
-        self.assertFalse(p.active)
-
-    def test_undo_command(self):
-        c=self.controller();p=c.update(InputState((.5,.5),frozenset({'THUMB_LEFT'})),0)
-        self.assertEqual(p.commands,('undo',))
+    def test_distant_reacquisition_starts_separate_stroke(self):
+        gate=IndexStrokeGate();gate.update('POINTER',(100.,100.),0,100)
+        gate.update('NONE',(100.,100.),.01,100)
+        self.assertEqual(gate.update('POINTER',(200.,200.),.02,100)[0],'NONE')
+        self.assertEqual(gate.update('POINTER',(201.,201.),.03,100)[0],'POINTER')
 
     def test_short_stroke_end_and_next_stroke_preserved(self):
         s=StrokeSmoother.from_config(Settings().ui['handwriting_smoothing'])
-        for i in range(6):s.update((100+i*2,100),True,i/30)
-        self.assertTrue(s.update((400,400),False,.3).finished)
-        new=s.update((300,300),True,.4)
-        self.assertIsNotNone(new.stroke)
+        points=[]
+        for i in range(6): points.append(s.update((100+i*2,100),True,i/30).point)
+        finished=s.update((400,400),False,.3).finished
+        self.assertEqual(finished,points)
+        next_stroke=s.update((300,300),True,.4)
+        self.assertEqual(next_stroke.stroke,[(300.,300.)])
 
     def test_fractional_landmarks_reach_adapter(self):
         r=GestureRecognizer();lm=hand();lm[8,0]+=.375
         result=r.update([lm],640,480,0)
         self.assertEqual(result.pointer_point[0],85.375)
+        self.assertEqual(result.pen_point,result.pointer_point)
 
-    def test_mapping_profile_preserves_calibration(self):
+    def test_profile_migration_preserves_calibration_and_mapping(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);(root/'config').mkdir()
             for name in ('default.json','gestures.json'):
                 (root/'config'/name).write_bytes((ROOT/'config'/name).read_bytes())
-            settings=Settings(root)
-            settings.set_action('POINTER','draw');settings.save()
-            loaded=Settings(root)
-            self.assertEqual(loaded.mapping['POINTER'],'draw')
-            self.assertEqual(loaded.ui['default_corners'],settings.ui['default_corners'])
+            ui=json.loads((ROOT/'config/default.json').read_text(encoding='utf-8'))['ui']
+            ui['profile_version']=4;ui['handwriting_smoothing']['end_trim']=3
+            mapping={'POINTER':'draw','L_SHAPE':'stop','WAVE':'toggle_highlighter'}
+            (root/'config/ui-user.json').write_text(json.dumps({'ui':ui,'mapping':mapping}))
+            s=Settings(root)
+            self.assertEqual(s.ui['profile_version'],6)
+            self.assertEqual(s.ui['handwriting_smoothing']['end_trim'],0)
+            self.assertEqual(s.ui['default_corners'],ui['default_corners'])
+            self.assertEqual(s.mapping,mapping)
 
-    def test_one_euro_stabilizes_noise(self):
-        f=OneEuroFilter(1.5,.01)
+    def test_less_lag_than_previous_profile_with_noise_suppression(self):
         raw=np.array([(50+i*3,80+(-4 if i%2==0 else 4)) for i in range(100)],float)
-        after=np.array([f(p,i/30) for i,p in enumerate(raw)])
-        self.assertLess(np.std(after[20:,1]),np.std(raw[20:,1]))
+        old=OneEuroFilter(1.2,.008);new=OneEuroFilter(1.8,.025)
+        before=np.array([old(p,i/30) for i,p in enumerate(raw)])
+        after=np.array([new(p,i/30) for i,p in enumerate(raw)])
+        self.assertLess(np.mean(raw[20:,0]-after[20:,0]),.7*np.mean(raw[20:,0]-before[20:,0]))
+        self.assertLess(np.sqrt(np.mean((after[20:,1]-80)**2)),2.)

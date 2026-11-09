@@ -454,7 +454,7 @@ class GestureRecognizer:
         r.pose = pose
         self._prev_pose = pose
 
-        r.pen_point = tuple(float(v) for v in (lm[THUMB_TIP, :2] + lm[INDEX_TIP, :2]) / 2)
+        r.pen_point = tuple(((lm[THUMB_TIP, :2] + lm[INDEX_TIP, :2]) / 2).astype(int))
         # During release confirmation or when fingers begin opening (ratio > pinch_hold), do not add hand movement to ink.
         # Prevent unwanted tails while releasing the pinch before the pen-up threshold (pinch_off).
         # Apply pinch_hold only when drawing with pinch (pinch_writing, configurable by UI). When pinch is mapped to eraser, 
@@ -468,7 +468,7 @@ class GestureRecognizer:
                 self._last_ink_point = r.pen_point
         else:
             self._last_ink_point = None
-        r.pointer_point = tuple(float(v) for v in lm[INDEX_TIP, :2]) if pose != "FIST" \
+        r.pointer_point = tuple(lm[INDEX_TIP, :2].astype(int)) if pose != "FIST" \
             else tuple(palm_center(lm).astype(int))
 
         # Page-swipe gestures are disabled; hand motion must not emit swipe events.

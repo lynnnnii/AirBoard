@@ -18,9 +18,7 @@ class RequestedChanges(unittest.TestCase):
         self.assertEqual(h.color,'#FFFF00')
         self.assertGreater(h.width,p.width)
         d=SwipeDetector()
-        events=[d.update((i*20,50),True,100,100,i*.05) for i in range(5)]
-        self.assertIn('SWIPE_RIGHT',events)  # Recognizer retained for diagnostics.
-        self.assertEqual(c.update(InputState((.5,.5),frozenset({'SWIPE_RIGHT'})),2).commands,())
+        for i in range(5): self.assertIsNone(d.update((i*20,50),True,100,100,i*.05))
 
     def test_whole_stroke_erase_undo_session(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -44,13 +42,12 @@ class RequestedChanges(unittest.TestCase):
     def test_small_writing_keeps_hover_full_range(self):
         c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]],(101,101)),Settings())
         c.writing_scale=.5
-        c.update(InputState((.2,.2),frozenset({'PINCH'})),0)
-        p=c.update(InputState((.4,.4),frozenset({'PINCH'})),.1)
+        c.update(InputState((.2,.2),frozenset({'POINTER'})),0)
+        p=c.update(InputState((.4,.4),frozenset({'POINTER'})),.1)
         np.testing.assert_allclose(p.position,(30,30))
-        c.update(InputState((.8,.8)),.2)
-        p=c.update(InputState((.8,.8)),1.7)
+        p=c.update(InputState((.8,.8)),.2)
         np.testing.assert_allclose(p.position,(80,80))
-        self.assertEqual(p.phase,'hover')  # Pen-up occurred in the preceding frame.
+        self.assertEqual(p.phase,'up')
 
     def test_eraser_continues_without_releasing_fist(self):
         from airboard.ui.demo import PDFRenderer

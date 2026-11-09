@@ -48,7 +48,6 @@ class StateTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.settings = Settings()
-        self.settings.mapping['POINTER'] = 'draw'  # Explicit legacy scenario; the default uses PINCH.
         self.c = UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),self.settings)
 
     def frame(self, *gestures: str, position: tuple | None = (.5,.5), suppressed: bool = False, now: float = 1.) -> object:
@@ -70,9 +69,9 @@ class StateTests(unittest.TestCase):
             p = self.frame('FIST','POINTER')
         self.assertEqual(p.tool,'eraser')
         self.assertTrue(self.frame('FIST','POINTER').active)
-        self.assertFalse(self.frame('POINTER').active)  # End eraser stroke on tool transition.
+        self.assertFalse(self.frame('POINTER').active)
         self.assertEqual(self.c.tool,'pen')
-        self.assertTrue(self.frame('POINTER').active)
+        self.assertFalse(self.frame('POINTER').active)
         self.frame()
         self.assertTrue(self.frame('POINTER').active)
 
@@ -130,7 +129,7 @@ class StateTests(unittest.TestCase):
             np.testing.assert_allclose(saved.corners,self.settings.ui['default_corners'])
             self.assertEqual(saved.size,(1280,720))
         self.assertIsNone(renderer.previous)
-        self.assertTrue(self.frame('POINTER').active)  # Non-pinch drawing does not use the repinch lock.
+        self.assertFalse(self.frame('POINTER').active)
         self.frame()
         self.assertTrue(self.frame('POINTER').active)
 
@@ -146,7 +145,7 @@ class StateTests(unittest.TestCase):
         self.assertTrue(np.any(screen[540:] == 255))
 
     def test_team_result_adapter(self) -> None:
-        result = SimpleNamespace(hands=[object()],pose='POINTER',pen_down=False,pen_point=(320,240),pointer_point=(400,200),events=['DOUBLE_CLAP'])
+        result = SimpleNamespace(hands=[object()],pose='POINTER',pen_down=True,pen_point=(320,240),pointer_point=(400,200),events=['DOUBLE_CLAP'])
         state = from_gesture_result(result,(641,481))
         self.assertEqual(state.position,(.625,200/480))
         self.assertEqual(state.gestures,frozenset({'POINTER','DOUBLE_CLAP'}))

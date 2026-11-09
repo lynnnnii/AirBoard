@@ -287,9 +287,8 @@ class MappingRuleTests(unittest.TestCase):
 
     def test_one_shot_and_held_gestures_offer_only_meaningful_actions(self):
         from airboard.ui.settings import allowed_actions
-        self.assertEqual(set(allowed_actions('DOUBLE_CLAP')), {'toggle_highlighter','undo','redo','none'})
-        for g in ('SWIPE_LEFT','SWIPE_RIGHT'):
-            self.assertEqual(set(allowed_actions(g)), {'none'})
+        for g in ('DOUBLE_CLAP', 'SWIPE_LEFT', 'SWIPE_RIGHT'):
+            self.assertEqual(set(allowed_actions(g)), {'toggle_highlighter', 'none'})
         for g in ('PINCH', 'FIST', 'POINTER', 'TWO_FINGERS'):
             self.assertNotIn('page_next', allowed_actions(g))
             self.assertIn('draw', allowed_actions(g))
