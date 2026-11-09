@@ -1,7 +1,7 @@
-# MediaPipe 0.10.21의 NumPy<2 환경에 맞춘 UI/웹캠 데모 의존성
+# Dependencies for the UI/webcam demo; compatible with MediaPipe 0.10.21 and NumPy < 2
 numpy==1.26.4
 opencv-contrib-python==4.11.0.86
 mediapipe==0.10.21
 
-# --pdf 실행용
+# Required when using --pdf
 PyMuPDF>=1.24.3,<2
