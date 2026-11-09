@@ -73,7 +73,7 @@ class UIPDFTests(unittest.TestCase):
                          patch('cv2.setMouseCallback'),patch('cv2.imshow') as show, \
                          patch('cv2.getWindowProperty',return_value=1), \
                          patch('cv2.destroyAllWindows'), \
-                         patch('cv2.waitKeyEx',side_effect=[2621440,ord('q')]) as wait, \
+                         patch('cv2.waitKeyEx',side_effect=[2555904,ord('q')]) as wait, \
                          patch.object(demo,'PDFRenderer',side_effect=make_renderer):
                         demo.main()
                         self.assertEqual(wait.call_count,2)
