@@ -299,7 +299,7 @@ class SwipeDetector:
         self.hist = deque()          # (t, x, y, is_open)
         self.last_seen = -1e9
         self.cooldown_until = 0.0
-        self._last_swipe = None      # (방향, 시각) Used to ignore reverse movement when returning the hand
+        self._last_swipe = None      # (direction, time) Used to ignore reverse movement when returning the hand
 
     def update(self, point, is_open, frame_w, frame_h, t):
         # Do not mix tool actions, two-hand frames, or tracking gaps into swipe history.
