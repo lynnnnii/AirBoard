@@ -1,4 +1,4 @@
-"""단독 데모의 도구/획/페이지 전환 제어. 제스처 판정이나 보정 알고리즘은 구현하지 않는다."""
+"""Control tool, stroke, and page transitions in the standalone demo; does not implement gesture recognition or smoothing."""
 from __future__ import annotations
 from typing import Any
 from .engine import AirBoardRenderer, Point, Tool
@@ -6,10 +6,10 @@ from .bridge import InkStyle, SmoothedInkBridge
 
 
 class RenderSession:
-    """팀 보정 모듈의 공개 update API를 렌더러와 연결한다."""
+    """Connect the team's smoothing module public update API to the renderer."""
 
     def __init__(self, board: AirBoardRenderer, smoother: Any, eraser_filter: Any) -> None:
-        """필기 보정기와 지우개 좌표 필터를 외부에서 주입한다."""
+        """Inject the handwriting smoother and eraser coordinate filter."""
         self.board = board
         self.smoother = smoother
         self.eraser_filter = eraser_filter
@@ -21,7 +21,7 @@ class RenderSession:
         self.lift_required = False
 
     def flush(self, t: float) -> None:
-        """페이지/도구/저장 전 현재 획을 꼬리 제거 후 확정한다."""
+        """Finalize the current stroke with tail trimming before page/tool changes or saving."""
         if self.effective == 'eraser':
             self.board.end_stroke()
         result = self.smoother.update(None, False, t)
@@ -31,7 +31,7 @@ class RenderSession:
         self.cursor = None
 
     def select_tool(self, tool: Tool, t: float) -> None:
-        """현재 획 확정 후 새 도구를 선택한다. 다시 펜을 들어야 시작한다."""
+        """Finalize the current stroke before selecting a tool; a fresh pen-down is required."""
         self.flush(t)
         self.selected = tool
         self.effective = tool
@@ -39,7 +39,7 @@ class RenderSession:
         self.lift_required = True
 
     def change_page(self, offset: int, t: float) -> bool:
-        """이전 페이지 획을 확정하고 이동한다. 손이 눌린 채 새 페이지에 그리지 않는다."""
+        """Finalize strokes before changing pages; do not draw on the next page while the pen is still down."""
         self.flush(t)
         changed = self.board.change_page(offset)
         self.lift_required = True
@@ -47,7 +47,7 @@ class RenderSession:
 
     def feed(self, point: Point | None, pen_down: bool, t: float, *,
              temporary_tool: Tool | None = None, eraser_active: bool = False) -> None:
-        """슬라이드 좌표 입력. 주먹/포인터는 temporary_tool로 기존 펜 선택을 보존한다."""
+        """Accept slide coordinates; fist/pointer tools are temporary and preserve the selected pen."""
         tool = temporary_tool or self.selected
         if tool != self.effective:
             self.flush(t)
@@ -56,7 +56,7 @@ class RenderSession:
         w, h = self.board.slide_size
         if point is not None and not (0 <= point[0] < w and 0 <= point[1] < h):
             point = None
-        # 추적 소실만으로는 재필기를 허용하지 않고 실제 pen-up을 확인한다.
+        # Tracking loss alone does not unlock drawing; require an actual pen-up.
         if point is not None and not pen_down and not eraser_active:
             self.lift_required = False
         blocked = self.lift_required
