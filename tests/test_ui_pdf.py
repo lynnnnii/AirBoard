@@ -1,4 +1,4 @@
-"""UI 패킷과 PDF 렌더러 연결을 실제 픽셀로 검증한다."""
+"""Verify UI packet integration with the PDF renderer using actual pixel output."""
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,7 +13,7 @@ from airboard.ui.demo import PDFRenderer
 
 class UIPDFTests(unittest.TestCase):
     def test_page_ink_eraser_and_original(self):
-        """UI 필기, 페이지 왕복, 지우개와 원본 PDF 보존을 확인한다."""
+        """Check UI drawing, page navigation, erasing, and preservation of the original PDF."""
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'sample.pdf'
             with pymupdf.open() as doc:
@@ -46,7 +46,7 @@ class UIPDFTests(unittest.TestCase):
 
 
     def test_input_end_keeps_pdf_navigation_and_quit(self):
-        """영상 종료와 카메라 읽기 실패 뒤에도 창·페이지 이동·종료를 유지한다."""
+        """After video ends or camera reading fails, keep the window, page navigation, and quit controls functional."""
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'sample.pdf'
             with pymupdf.open() as doc:
