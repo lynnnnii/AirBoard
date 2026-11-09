@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import pymupdf
 from airboard.render import AirBoardRenderer, RenderConfig
+from airboard.render.engine import color_bgr
 
 
 class RenderTests(unittest.TestCase):
@@ -46,6 +47,47 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(self.board.undo())
         np.testing.assert_array_equal(self.board.render_page(), bg)
         self.assertFalse(self.board.undo())
+
+    def full_preview(self) -> np.ndarray:
+        """Reference result: blend the whole in-progress stroke every frame (the previous render_page)."""
+        board = self.board
+        canvas = board._canvas(board.current_page)
+        result = canvas.composed.copy()
+        active = board._active
+        if active is not None and active.bounds is not None:
+            x0, y0, x1, y1 = active.bounds
+            region = np.s_[y0:y1, x0:x1]
+            a = active.mask[region].astype(np.float32)[..., None] / 255.0 * active.opacity
+            if active.stroke.tool == 'eraser':
+                value = canvas.color[region] * (1 - a) + canvas.background[region] * (1 - canvas.alpha[region] * (1 - a))
+            else:
+                value = np.array(color_bgr(active.stroke.color), np.float32) * a + canvas.composed[region] * (1 - a)
+            result[region] = np.rint(value).clip(0, 255).astype(np.uint8)
+        return result
+
+    def test_incremental_preview_matches_full_blend(self) -> None:
+        """Blending only newly drawn segments gives exactly the same frame as blending the whole stroke."""
+        self.stroke('pen', [(30, 30), (200, 120)])
+        self.stroke('highlighter', [(20, 100), (290, 60)])
+        path = [(20 + i * 9, 90 + round(50 * np.sin(i / 3))) for i in range(30)]
+        path += path[::-1]                                  # go back over the same area
+        for tool in ('pen', 'highlighter', 'eraser'):
+            self.board.begin_stroke(tool)
+            for i, point in enumerate(path):
+                self.board.add_point(*point)
+                if i % 3:                                   # some frames add several points before rendering
+                    continue
+                np.testing.assert_array_equal(self.board.render_page(), self.full_preview())
+            np.testing.assert_array_equal(self.board.render_page(), self.full_preview())
+            self.board.end_stroke()
+
+    def test_preview_copy_is_not_shared(self) -> None:
+        """Drawing UI on a returned frame must not leak into the next frame."""
+        self.board.begin_stroke('pen')
+        self.board.add_point(40, 40)
+        frame = self.board.render_page()
+        frame[:] = 0
+        self.assertFalse(np.array_equal(self.board.render_page(), frame))
 
     def test_highlighter_preview_does_not_accumulate(self) -> None:
         """Duplicate points and repeated rendering must not darken the same highlighter stroke."""

@@ -440,7 +440,7 @@ def main() -> None:
             screen = compose_screen(cv2.resize(camera,(camera_width,camera_height)), slide, page, packet.tool, message,
                                     renderer.board.page_count if args.pdf else None)
             cv2.imshow('AirBoard UI demo',screen)
-            key = cv2.waitKeyEx(16)
+            key = cv2.waitKeyEx(1)   # 1ms: only polls keys; a longer wait adds directly to every frame
             if key==ord('q') or cv2.getWindowProperty('AirBoard UI demo',cv2.WND_PROP_VISIBLE)<1:
                 break
             up,down,left,right = (2490368,2621440,2424832,2555904)

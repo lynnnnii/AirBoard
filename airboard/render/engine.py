@@ -98,6 +98,16 @@ class _Active:
     opacity: float
     mask: np.ndarray
     bounds: tuple[int, int, int, int] | None = None
+    preview: np.ndarray | None = None                  # Page composited with this stroke, reused across frames
+    dirty: tuple[int, int, int, int] | None = None     # Mask area changed since the last preview update
+
+
+def _union(box: tuple[int, int, int, int] | None,
+           other: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """Smallest box containing both pixel boxes (x0, y0, x1, y1)."""
+    if box is None:
+        return other
+    return min(box[0], other[0]), min(box[1], other[1]), max(box[2], other[2]), max(box[3], other[3])
 
 
 class AirBoardRenderer:
@@ -181,11 +191,8 @@ class AirBoardRenderer:
                   max(0, min(previous[1], now[1]) - pad),
                   min(w, max(previous[0], now[0]) + pad + 1),
                   min(h, max(previous[1], now[1]) + pad + 1))
-        if active.bounds is None:
-            active.bounds = bounds
-        else:
-            a, b, x, y = active.bounds
-            active.bounds = min(a, bounds[0]), min(b, bounds[1]), max(x, bounds[2]), max(y, bounds[3])
+        active.bounds = _union(active.bounds, bounds)
+        active.dirty = _union(active.dirty, bounds)
 
     @staticmethod
     def _apply(canvas: _Canvas, active: _Active) -> None:
@@ -356,20 +363,33 @@ class AirBoardRenderer:
         return False
 
     def render_page(self) -> np.ndarray:
-        """Return a BGR image copy without UI; composite preview ink only once."""
+        """Return a BGR image copy without UI; composite preview ink only once.
+
+        The in-progress stroke is composited incrementally: the first call blends the whole stroke bounds,
+        later calls blend only the area its newest segments touched (active.dirty). Committed ink does not
+        change while a stroke is active (every edit calls end_stroke first), so the result is identical to
+        re-blending the full bounds every frame, without its cost growing with stroke length.
+        """
         canvas = self._canvas(self.current_page)
-        result = canvas.composed.copy()
         active = self._active
-        if active is not None and active.bounds is not None:
-            x0, y0, x1, y1 = active.bounds
+        if active is None or active.bounds is None:
+            return canvas.composed.copy()
+        if active.preview is None:
+            active.preview = canvas.composed.copy()
+            box = active.bounds
+        else:
+            box = active.dirty
+        if box is not None:
+            x0, y0, x1, y1 = box
             region = np.s_[y0:y1, x0:x1]
             a = active.mask[region].astype(np.float32)[..., None] / 255.0 * active.opacity
             if active.stroke.tool == 'eraser':
                 value = canvas.color[region] * (1 - a) + canvas.background[region] * (1 - canvas.alpha[region] * (1 - a))
             else:
                 value = np.array(color_bgr(active.stroke.color), np.float32) * a + canvas.composed[region] * (1 - a)
-            result[region] = np.rint(value).clip(0, 255).astype(np.uint8)
-        return result
+            active.preview[region] = np.rint(value).clip(0, 255).astype(np.uint8)
+        active.dirty = None
+        return active.preview.copy()
 
     def goto_page(self, page: int) -> bool:
         """Navigate to a zero-based page; remain on the current page if out of range."""
