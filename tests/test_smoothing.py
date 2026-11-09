@@ -1,4 +1,4 @@
-"""떨림 보정·꼬리 제거 단위 테스트. 실행: python -m unittest tests.test_smoothing"""
+"""Unit tests for jitter smoothing and tail trimming. Run: python -m unittest tests.test_smoothing"""
 
 import json
 import os
@@ -14,7 +14,7 @@ FPS = 30
 
 
 def noisy_path(seed=0, sigma=3.0):
-    """0~2초 정지, 2~4초 느린 원(0.5바퀴/초), 4~6초 빠른 원(2바퀴/초)에 흔들림을 더한 경로."""
+    """Noisy path: stationary 0–2 s; slow circle (0.5 rev/s) 2–4 s; fast circle (2 rev/s) 4–6 s."""
     t = np.arange(0, 6, 1 / FPS)
     angle = np.where(t < 2, 0.0, np.where(t < 4, (t - 2) * np.pi, 2 * np.pi + (t - 4) * 4 * np.pi))
     moving = t >= 2
@@ -59,7 +59,7 @@ class FilterTest(unittest.TestCase):
 
 class StrokeSmootherTest(unittest.TestCase):
     def run_stroke(self, n_down, start_skip=2, end_trim=3):
-        """n_down 프레임 동안 쓰고 펜을 든다. x좌표 = 프레임 번호 * 10."""
+        """Draw for n_down frames before lifting the pen; x = frame index * 10."""
         s = StrokeSmoother(NoFilter(), start_skip, end_trim)
         finished = None
         for i in range(n_down + 2):
@@ -69,13 +69,13 @@ class StrokeSmootherTest(unittest.TestCase):
 
     def test_trims_start_and_end_tails(self):
         xs = [p[0] for p in self.run_stroke(10)]
-        self.assertEqual(xs, [20, 30, 40, 50, 60])   # 앞 2점(0, 10)과 뒤 3점(70, 80, 90) 제거
+        self.assertEqual(xs, [20, 30, 40, 50, 60])   # Trim first two points (0, 10) and last three (70, 80, 90)
 
     def test_no_trim_keeps_all_points(self):
         self.assertEqual(len(self.run_stroke(10, start_skip=0, end_trim=0)), 10)
 
     def test_short_stroke_is_not_trimmed_away(self):
-        # 점이 end_trim + 1개 이하면 끝을 자르지 않는다 (짧은 점·밑줄이 통째로 사라지지 않게)
+        # Do not trim the end if the stroke contains at most end_trim + 1 points (preserve short dots/underlines)
         self.assertEqual(len(self.run_stroke(5)), 3)
 
     def test_finished_reported_once(self):
@@ -98,7 +98,7 @@ class StrokeSmootherTest(unittest.TestCase):
         self.assertEqual(len(r.finished), 5)
         self.assertIsNone(r.point)
         self.assertIsNone(s.stroke)
-        # 필터가 초기화돼 다시 나타난 위치로 바로 간다 (이전 위치 쪽으로 끌려가지 않음)
+        # Reset the filter so a reacquired hand jumps directly to the new position rather than drifting toward the old one
         self.assertEqual(s.update((900, 900), False, 6 / FPS).point, (900.0, 900.0))
 
     def test_no_stroke_while_pen_up(self):
@@ -110,7 +110,7 @@ class StrokeSmootherTest(unittest.TestCase):
 
 
 class SplineTest(unittest.TestCase):
-    """곡선 보간: 보정 점을 지나면서 사이를 촘촘히 채우고, 이미 내보낸 점은 바꾸지 않는다."""
+    """Spline interpolation passes through control points, fills gaps, and never modifies already-emitted points."""
 
     def corner(self):
         return [(0, 0), (30, 0), (60, 0), (60, 30), (60, 60)]
@@ -121,14 +121,14 @@ class SplineTest(unittest.TestCase):
         for p in pts:
             self.assertIn(p, [tuple(round(v, 6) for v in q) for q in out])
         gaps = np.linalg.norm(np.diff(np.array(out), axis=0), axis=1)
-        self.assertLess(gaps.max(), 4)      # 직선 길이 기준 3px 간격, 곡선은 조금 더 길다
+        self.assertLess(gaps.max(), 4)      # 3 px intervals measured along straight segments; curves can be slightly longer
 
     def test_live_stroke_only_grows_and_finish_matches_densify(self):
         s = StrokeSmoother(NoFilter(), 0, 0, spline=True)
         previous = []
         for i, p in enumerate(self.corner()):
             stroke = list(s.update(p, True, i / FPS).stroke)
-            self.assertEqual(stroke[:len(previous)], previous)   # 렌더러가 새 점만 이어 그리면 된다
+            self.assertEqual(stroke[:len(previous)], previous)   # Renderer only needs to append new points
             previous = stroke
         finished = s.update((60, 60), False, 1.).finished
         np.testing.assert_allclose(finished, densify(self.corner()))
@@ -138,7 +138,7 @@ class SplineTest(unittest.TestCase):
         for i, p in enumerate(self.corner()):
             s.update(p, True, i / FPS)
         finished = s.update((60, 60), False, 1.).finished
-        np.testing.assert_allclose(finished[-1], (60, 0))       # 마지막 보정 점 2개를 지운 곳에서 끝난다
+        np.testing.assert_allclose(finished[-1], (60, 0))       # Ends after trimming the last two smoothed control points
 
 
 class ConfigTest(unittest.TestCase):
