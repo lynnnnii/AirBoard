@@ -1,1 +1,1 @@
-"""OpenCV UI 및 렌더러 독립 데이터 인터페이스."""
+"""OpenCV UI and renderer-independent data interfaces."""

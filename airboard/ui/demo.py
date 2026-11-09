@@ -1,4 +1,4 @@
-"""좌표 변환 및 UI 데모. --pdf로 팀 PDF 렌더러를 연결한다."""
+"""Coordinate mapping and UI demo; --pdf connects the team's PDF renderer."""
 import argparse
 import math
 import time
@@ -13,14 +13,14 @@ from .overlay import Overlay, bgr
 
 
 class PreviewRenderer:
-    """흰 배경 데모 전용 레이어. PDF/저장/undo는 팀 render 담당."""
+    """White-background preview only; PDF rendering, saving, and undo are handled by the render module."""
     def __init__(self, size: tuple[int,int]) -> None:
         w,h = size
         self.ink = np.full((h,w,3),255,np.uint8)
         self.previous = None
 
     def consume(self, packet: object) -> np.ndarray:
-        """렌더 패킷을 소비하고 UI를 그릴 복사본을 반환한다."""
+        """Consume a render packet and return an image copy for the UI."""
         if not packet.active:
             self.previous = None
         if packet.active and packet.position:
@@ -39,7 +39,7 @@ class PreviewRenderer:
 
 
 class PDFRenderer:
-    """UI 패킷을 팀 PDF 렌더러의 공개 API에 연결한다."""
+    """Connect UI packets to the team's public PDF renderer API."""
     def __init__(self, path: str, config: object, state_dir: Path | None = None, smoothing_config: dict | None = None) -> None:
         from airboard.render import AirBoardRenderer
         self.board = AirBoardRenderer(path, config)
@@ -55,7 +55,7 @@ class PDFRenderer:
             from airboard.smoothing.stroke import StrokeSmoother, make_filter
             from airboard.render import SmoothedInkBridge
             self.smoother = StrokeSmoother.from_config(smoothing_config)
-            # 형광펜은 슬라이드의 글자를 정확히 덮어야 해서 보정·곡선 없이 원래 좌표를 쓴다 (끝 꼬리 제거만 같게).
+            # For exact text alignment, highlighter strokes use raw coordinates without filtering or splines (but still trim stroke tails).
             self.highlighter_smoother = StrokeSmoother(NoFilter(),smoothing_config.get('start_skip',0),
                                                        smoothing_config.get('end_trim',0))
             self.cursor_filter = make_filter(smoothing_config['method'], smoothing_config)
@@ -70,11 +70,11 @@ class PDFRenderer:
                 raise
 
     def _smoother_for(self, tool: str | None) -> object:
-        """펜은 떨림 보정·곡선, 형광펜은 보정 없음."""
+        """Smooth and interpolate pen strokes; do not smooth highlighter strokes."""
         return self.highlighter_smoother if tool=='highlighter' else self.smoother
 
     def finish_stroke(self) -> None:
-        """꼬리 제거를 적용해 진행 획을 확정한다. 지우개도 먼저 확정한다."""
+        """Finalize the in-progress stroke with tail trimming; finalize erasing as well."""
         if self.smoother is not None:
             from airboard.render import InkStyle
             if self._last_tool == 'eraser':
@@ -86,13 +86,13 @@ class PDFRenderer:
         self._dirty = True
 
     def consume(self, packet: object) -> np.ndarray:
-        """PDF 좌표를 팀 보정기에 통과시켜 미리보기와 최종 획을 분리한다."""
+        """Apply the team's smoother to slide coordinates, separating preview strokes from committed ink."""
         self.display_position = packet.position
         tail = None
         if packet.tool != 'eraser' or not packet.active:
             self._erase_previous = None
         if packet.tool == 'eraser':
-            # 주먹을 쥔 채 지나간 길을 반경 간격으로 나눠 닿은 획을 통째로 지운다 (빠르게 움직여도 건너뛰지 않음).
+            # Sample the eraser path at radius-based intervals so fast fist movements do not skip touched strokes.
             self.finish_stroke()
             if packet.active and packet.position is not None:
                 start = self._erase_previous or packet.position
@@ -123,7 +123,7 @@ class PDFRenderer:
                 self.bridge.consume(result,self._ink_style)
                 self.display_position=result.point
                 if packet.active and result.stroke and result.point is not None:
-                    # 곡선 보간은 마지막 한 구간을 다음 프레임에 확정하므로, 그 사이는 직선으로 잠깐 보여 늦게 따라오지 않게 한다.
+                    # Curve interpolation commits its last segment on the next frame; preview a straight segment meanwhile to avoid visible lag.
                     tail=(result.stroke[-1],result.point,self._ink_style)
             else:
                 if packet.position is None:
@@ -147,28 +147,28 @@ class PDFRenderer:
         return image
 
     def checkpoint(self, force: bool = False) -> None:
-        """획 종료 또는 2초 간격으로 진행 상태를 저장한다."""
+        """Save the in-progress state after stroke completion or at two-second intervals."""
         if self.state_path is not None and self._dirty and (force or time.monotonic()-self._last_save>=2):
             self.board.save_session(self.state_path)
             self._dirty = False
             self._last_save = time.monotonic()
 
     def change_page(self, offset: int) -> None:
-        """페이지 변경과 직전 필기를 저장한다."""
+        """Save page transitions and the most recent ink."""
         self.finish_stroke()
         self.board.change_page(offset)
         self._dirty = True
         self.checkpoint(force=True)
 
     def clear_page(self) -> None:
-        """지운 상태도 저장하여 재실행 시 지운 획이 나타나지 않게 한다."""
+        """Persist erasures so deleted strokes do not reappear after restarting."""
         self.finish_stroke()
         self.board.clear_page()
         self._dirty = True
         self.checkpoint(force=True)
 
     def undo(self) -> bool:
-        """현재 페이지의 마지막 획/지우개 작업을 취소한다."""
+        """Undo the latest stroke or eraser operation on the current page."""
         self.finish_stroke()
         changed = self.board.undo()
         self._dirty = True
@@ -176,7 +176,7 @@ class PDFRenderer:
         return changed
 
     def redo(self) -> bool:
-        """취소한 마지막 획/지우개 작업을 다시 적용한다."""
+        """Redo the last undone stroke or eraser operation."""
         self.finish_stroke()
         changed = self.board.redo()
         self._dirty = True
@@ -184,7 +184,7 @@ class PDFRenderer:
         return changed
 
     def close(self) -> None:
-        """종료 직전 진행 중 필기와 페이지를 저장하고 자원을 닫는다."""
+        """Save any active stroke and current page before closing resources."""
         try:
             self.finish_stroke()
             self._dirty = True
@@ -195,7 +195,7 @@ class PDFRenderer:
 
 def reset_calibration(controller: UIController, renderer: object,
                       corners: list, path: object) -> None:
-    """기본 영역을 저장하고 현재 획을 종료해 새 좌표계로 연결되지 않게 한다."""
+    """Save the default region and finish the current stroke to avoid joining ink across coordinate systems."""
     candidate = Calibration(corners, controller.calibration.size)
     candidate.save(path)
     if isinstance(renderer, PDFRenderer):
@@ -209,7 +209,7 @@ def reset_calibration(controller: UIController, renderer: object,
 
 def compose_screen(camera: np.ndarray, slide: np.ndarray, page: int,
                    tool: str, message: str = '', page_count: int | None = None) -> np.ndarray:
-    """필기 영역 아래에 불투명 상태줄에 페이지와 도구 상태를 표시한다."""
+    """Show page and tool status in an opaque bar below the writing area."""
     height = max(camera.shape[0], slide.shape[0])
     width = camera.shape[1] + slide.shape[1]
     screen = np.full((height + 78, width, 3), 235, np.uint8)
@@ -226,7 +226,7 @@ def compose_screen(camera: np.ndarray, slide: np.ndarray, page: int,
 
 
 def draw_settings(slide: np.ndarray, mapping: dict, row: int) -> None:
-    """설정 안내를 큰 글씨와 불투명 배경으로 분리해 축소 화면에서도 읽게 한다."""
+    """Render settings instructions with large text and an opaque backdrop for legibility at smaller scales."""
     slide[:] = 245
     cv2.rectangle(slide, (0, 0), (slide.shape[1]-1, 153), (32,32,32), -1)
     lines = ['GESTURE SETTINGS', 'UP / DOWN: select gesture',
@@ -243,7 +243,7 @@ def draw_settings(slide: np.ndarray, mapping: dict, row: int) -> None:
 
 
 def main() -> None:
-    """웹캠 기본; --mouse/--virtual/--video 및 화면 없는 회귀 실행 지원."""
+    """Default to webcam; support --mouse, --virtual, --video and headless regression runs."""
     parser = argparse.ArgumentParser(description=__doc__)
     sources = parser.add_mutually_exclusive_group()
     sources.add_argument('--mouse',action='store_true')
@@ -279,7 +279,7 @@ def main() -> None:
     camera_width, camera_height = (512,384) if args.pdf else (640,480)
 
     def move_page(offset: int) -> str:
-        """실제 페이지를 이동하고 페이지 크기에 맞춰 좌표 변환을 갱신한다."""
+        """Navigate PDF pages and update coordinate mapping for the new page dimensions."""
         nonlocal page
         previous_page = page
         if args.pdf:
@@ -303,7 +303,7 @@ def main() -> None:
     message = ''
 
     def mouse_event(kind: int, x: int, y: int, flags: int, param: object) -> None:
-        """왼쪽 640×480 입력 패널의 마우스를 카메라 정규화 좌표로 해석."""
+        """Interpret mouse coordinates in the left 640x480 input panel as normalized camera coordinates."""
         mouse['position'] = (x/(camera_width-1),y/(camera_height-1)) if 0<=x<camera_width and 0<=y<camera_height else None
         if kind==cv2.EVENT_LBUTTONDOWN:
             mouse['down'] = True
@@ -355,10 +355,10 @@ def main() -> None:
                     frame = cv2.flip(frame,1)
                     h,w = frame.shape[:2]
                     hands = tracker.detect(frame)
-                    # 매핑에 따라 인식기 판정을 켜고 끈다 (설정 화면에서 바꾸면 바로 반영)
-                    #  - 검지로 쓰기: 검지 자세 유지와 ✌️ 인식
-                    #  - ✌️를 멈춤 말고 다른 동작에 연결: ✌️ 인식 (멈춤은 검지로 쓸 때만 의미가 있다)
-                    #  - 핀치로 쓰기: 손가락이 벌어지기 시작하면 잉크 멈춤 (지우개 등으로 쓸 때는 끈다)
+                    # Enable or disable recognizer decisions based on the active gesture mapping (applied immediately after settings changes)
+                    #  - Index-finger writing: recognize the held index pose and two-finger gesture
+                    #  - If two fingers are mapped to an action other than stop, recognize that gesture (stop matters only for index-based writing)
+                    #  - Pinch writing: stop inking as the fingers start opening (disable this when another pose is mapped to drawing)
                     recognizer.config['index_writing'] = settings.mapping.get('POINTER') == 'draw'
                     recognizer.config['two_fingers'] = settings.mapping.get('TWO_FINGERS','none') not in ('none','stop')
                     recognizer.config['pinch_writing'] = settings.mapping.get('PINCH') == 'draw'
@@ -451,7 +451,7 @@ def main() -> None:
                     if 'draw' not in settings.mapping.values():
                         message = 'SAVE BLOCKED: choose a held gesture and assign DRAW.'
                 elif key in (left,right):
-                    # 이 제스처에 의미 있는 동작만 돌아가며 고른다. draw는 여러 제스처에 지정할 수 있다.
+                    # Cycle through valid actions for this gesture; drawing can be assigned to multiple gestures.
                     name = names[row]
                     choices = allowed_actions(name)
                     current = settings.mapping[name]
@@ -502,7 +502,7 @@ def main() -> None:
             elif key in (left,right):
                 message = move_page(-1 if key==left else 1)
             elif key in (ord('['),ord(']')):
-                # 글씨 크기 30~100% 조절 (이번 실행에만 적용, 기본값은 config의 ui.writing_scale)
+                # Adjust writing scale from 30% to 100% for this run only; the default is ui.writing_scale in config.
                 step = -.1 if key==ord('[') else .1
                 controller.writing_scale = round(min(1.,max(.3,controller.writing_scale+step)),1)
                 message = f'Text size {round(controller.writing_scale*100)}%'

@@ -1,7 +1,7 @@
-"""AirBoard의 PDF 표시, 필기 레이어, 페이지별 undo와 내보내기.
+"""AirBoard PDF display, ink layers, per-page undo, and export.
 
-이 모듈은 창/웹캠을 열지 않는다. 입력은 보정된 슬라이드 픽셀 좌표,
-출력은 UI를 포함하지 않는 BGR 이미지다. 같은 스레드에서 호출한다.
+This module does not open windows or webcams. Inputs are calibrated slide pixel coordinates;
+outputs are BGR images without UI elements. Call from the same thread.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ Point = tuple[float, float]
 
 @dataclass
 class Stroke:
-    """안내서의 Stroke 형식. page는 0부터, color는 #RRGGBB, width는 지름(px)."""
+    """Stroke data format: zero-based page, #RRGGBB color, and diameter in pixels."""
     stroke_id: int
     page: int
     tool: Tool
@@ -36,7 +36,7 @@ class Stroke:
 
 @dataclass(frozen=True)
 class RenderConfig:
-    """config/default.json의 render 항목에서 읽는 설정."""
+    """Configuration loaded from the render section of config/default.json."""
     max_width: int
     max_height: int
     cache_pages: int
@@ -48,34 +48,34 @@ class RenderConfig:
     eraser_width: float
 
     def __post_init__(self) -> None:
-        """잘못된 크기/투명도 설정을 일찍 거부한다."""
+        """Reject invalid dimensions and opacity early."""
         if min(self.max_width, self.max_height, self.cache_pages) < 1:
-            raise ValueError('렌더링 크기와 cache_pages는 양수여야 합니다.')
+            raise ValueError('Rendering dimensions and cache_pages must be positive.')
         if not 0 < self.highlighter_opacity <= 1:
-            raise ValueError('highlighter_opacity는 0 초과 1 이하여야 합니다.')
+            raise ValueError('highlighter_opacity must be in (0, 1].')
         for value in (self.pen_width, self.highlighter_width, self.eraser_width):
             if not math.isfinite(value) or value <= 0:
-                raise ValueError('도구 굵기는 유한한 양수여야 합니다.')
+                raise ValueError('Tool width must be a finite positive number.')
         color_bgr(self.pen_color)
         color_bgr(self.highlighter_color)
 
     @classmethod
     def from_json(cls, path: str | Path) -> RenderConfig:
-        """기존 설정 파일의 다른 팀원 항목은 읽거나 수정하지 않는다."""
+        """Do not read or modify unrelated teammates' configuration sections."""
         return cls(**json.loads(Path(path).read_text(encoding='utf-8'))['render'])
 
 
 def color_bgr(color: str) -> tuple[int, int, int]:
-    """HEX 색상을 OpenCV BGR로 변환한다."""
+    """Convert hexadecimal colors to OpenCV BGR."""
     if len(color) != 7 or not color.startswith('#'):
-        raise ValueError('color는 #RRGGBB 형식이어야 합니다.')
+        raise ValueError('color must use #RRGGBB format.')
     r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
     return b, g, r
 
 
 @dataclass
 class _Operation:
-    """작업 당시 투명도도 기록하여 나중 설정 변경에 영향받지 않게 한다."""
+    """Store opacity per operation so later settings changes do not affect existing strokes."""
     stroke: Stroke | None = None
     opacity: float = 1.0
     clear: bool = False
@@ -84,7 +84,7 @@ class _Operation:
 
 @dataclass
 class _Canvas:
-    """원본과 premultiplied 색/alpha를 분리해 원본 삭제를 막는다."""
+    """Keep the original PDF separate from premultiplied color and alpha layers."""
     background: np.ndarray
     color: np.ndarray
     alpha: np.ndarray
@@ -93,7 +93,7 @@ class _Canvas:
 
 @dataclass
 class _Active:
-    """한 번의 연속 필기 또는 지우개 작업. 마스크 중복은 누적 농도를 만들지 않는다."""
+    """One continuous ink or eraser operation; overlapping masks do not repeatedly darken the same stroke."""
     stroke: Stroke
     opacity: float
     mask: np.ndarray
@@ -101,16 +101,16 @@ class _Active:
 
 
 class AirBoardRenderer:
-    """PDF와 필기 상태 소유자. 손 인식/제스처/UI 모듈을 참조하지 않는다."""
+    """Own PDF and ink state without depending on tracking, gestures, or UI modules."""
 
     def __init__(self, pdf_path: str | Path, config: RenderConfig) -> None:
-        """PDF를 열고 첫 페이지를 캐시한다. 모든 페이지를 미리 렌더링하지 않는다."""
+        """Open the PDF and cache its first page without pre-rendering every page."""
         self.pdf_path = Path(pdf_path).resolve()
         self.config = config
         self.doc = pymupdf.open(self.pdf_path)
         if self.doc.needs_pass or len(self.doc) == 0:
             self.doc.close()
-            raise ValueError('암호가 없고 페이지가 있는 PDF가 필요합니다.')
+            raise ValueError('A non-password-protected PDF with at least one page is required.')
         self.current_page = 0
         self._history: list[list[_Operation]] = [[] for _ in self.doc]
         self._redo_history: list[list[_Operation]] = [[] for _ in self.doc]
@@ -122,17 +122,17 @@ class AirBoardRenderer:
 
     @property
     def page_count(self) -> int:
-        """전체 페이지 수."""
+        """Total page count."""
         return len(self.doc)
 
     @property
     def slide_size(self) -> tuple[int, int]:
-        """현재 슬라이드의 (너비, 높이). 좌표 변환 담당자에게 전달한다."""
+        """Current slide dimensions (width, height), provided to coordinate mapping."""
         height, width = self._canvas(self.current_page).background.shape[:2]
         return width, height
 
     def _canvas(self, index: int) -> _Canvas:
-        """페이지 이미지를 LRU 캐시에서 얻고, 없으면 한 번 렌더링한다."""
+        """Read a rendered page from the LRU cache or render it once when absent."""
         if index in self._cache:
             self._cache.move_to_end(index)
             return self._cache[index]
@@ -155,7 +155,7 @@ class AirBoardRenderer:
         return canvas
 
     def _settings(self, tool: Tool) -> tuple[str, float, float]:
-        """모드별 기본 색상, 지름, 투명도."""
+        """Default color, diameter, and opacity for each tool mode."""
         c = self.config
         if tool == 'pen':
             return c.pen_color, c.pen_width, 1.0
@@ -165,7 +165,7 @@ class AirBoardRenderer:
 
     @staticmethod
     def _paint_segment(active: _Active, point: Point) -> None:
-        """이전 점과 현재 점 사이 마스크를 갱신한다. 한 점도 점으로 그린다."""
+        """Update the mask between the previous and current points; render isolated points as dots."""
         stroke = active.stroke
         now = tuple(round(v) for v in point)
         previous = tuple(round(v) for v in stroke.points[-1]) if stroke.points else now
@@ -189,7 +189,7 @@ class AirBoardRenderer:
 
     @staticmethod
     def _apply(canvas: _Canvas, active: _Active) -> None:
-        """마스크의 범위만 합성한다. 지우개는 필기 alpha만 제거한다."""
+        """Composite only the mask bounds; erasing removes ink alpha, not the PDF background."""
         if active.bounds is None:
             return
         x0, y0, x1, y1 = active.bounds
@@ -207,7 +207,7 @@ class AirBoardRenderer:
         canvas.composed[region] = np.rint(output).clip(0, 255).astype(np.uint8)
 
     def _replay(self, canvas: _Canvas, operation: _Operation) -> None:
-        """undo 또는 캐시 재구성 시 작업을 원래 순서대로 재생한다."""
+        """Replay operations in original order during undo or cache reconstruction."""
         if operation.erased_ids is not None:
             return
         if operation.clear:
@@ -225,15 +225,15 @@ class AirBoardRenderer:
 
     def begin_stroke(self, tool: Tool = 'pen', *, color: str | None = None,
                      width: float | None = None) -> None:
-        """새 작업 시작. eraser도 한 번의 연속 작업을 한 undo 단위로 기록한다."""
+        """Start an operation; each continuous eraser action counts as one undo step."""
         if tool not in ('pen', 'highlighter', 'eraser', 'pointer'):
-            raise ValueError(f'지원하지 않는 도구: {tool}')
+            raise ValueError(f'Unsupported tool: {tool}')
         default_color, default_width, opacity = self._settings(tool)
         selected_color = color if color is not None else default_color
         selected_width = width if width is not None else default_width
         color_bgr(selected_color)
         if not math.isfinite(selected_width) or selected_width <= 0:
-            raise ValueError('width는 유한한 양수여야 합니다.')
+            raise ValueError('width must be a finite positive number.')
         self.end_stroke()
         if tool == 'pointer':
             return
@@ -243,7 +243,7 @@ class AirBoardRenderer:
                                np.zeros(self._canvas(self.current_page).background.shape[:2], np.uint8))
 
     def add_point(self, x: float, y: float) -> bool:
-        """슬라이드 픽셀 좌표 추가. 범위 밖/NaN은 획을 종료하여 연결선을 막는다."""
+        """Append slide pixel coordinates; out-of-bounds or NaN points end the stroke to avoid connecting lines."""
         if self._active is None:
             return False
         w, h = self.slide_size
@@ -254,7 +254,7 @@ class AirBoardRenderer:
         return True
 
     def end_stroke(self) -> None:
-        """현재 획 확정. 손 추적 실패/도구 변경/페이지 이동 전에도 호출한다."""
+        """Finalize the current stroke; also call before tracking loss, tool changes, or page navigation."""
         active = self._active
         if active is None:
             return
@@ -266,14 +266,14 @@ class AirBoardRenderer:
         self._active = None
 
     def discard_preview(self) -> None:
-        """미리보기를 확정하지 않고 제거한다. 보정 모듈의 최종 획으로 대체할 때 사용한다."""
+        """Discard uncommitted preview ink when replacing it with the smoother's final stroke."""
         self._active = None
 
     def set_preview(self, points: list[Point] | None, tool: Tool = 'pen', *,
                     color: str | None = None, width: float | None = None) -> None:
-        """보정 모듈의 진행 중 획을 복사해 표시한다. 짧아지면 마스크도 다시 만든다.
+        """Preview an in-progress smoothed stroke; rebuild its mask if the stroke shrinks.
 
-        기존 점에 이어진 경우 새 구간만 그린다. pen_down 기반 update API와 혼용하지 않는다.
+        If points extend an existing stroke, draw only new segments. Do not mix with pen_down-based update API.
         """
         if points is None:
             self.discard_preview()
@@ -285,7 +285,7 @@ class AirBoardRenderer:
         w, h = self.slide_size
         if any(not (math.isfinite(x) and math.isfinite(y) and 0 <= x < w and 0 <= y < h)
                for x, y in copied):
-            raise ValueError('미리보기 좌표는 슬라이드 안의 유한한 픽셀 좌표여야 합니다.')
+            raise ValueError('Preview coordinates must be finite pixel positions within the slide.')
         active = self._active
         same_style = active is not None and (
             active.stroke.tool, active.stroke.color, active.stroke.width
@@ -301,7 +301,7 @@ class AirBoardRenderer:
 
     def commit_stroke(self, points: list[Point], tool: Tool = 'pen', *,
                       color: str | None = None, width: float | None = None) -> None:
-        """꼬리 제거가 끝난 최종 획으로 미리보기를 교체하여 한 번만 확정한다."""
+        """Replace the preview with the tail-trimmed final stroke and commit it once."""
         self.discard_preview()
         if not points:
             return
@@ -311,9 +311,9 @@ class AirBoardRenderer:
     def update(self, cursor: Point | None, tool: Tool, pen_down: bool, *,
                eraser_active: bool = False, color: str | None = None,
                width: float | None = None) -> None:
-        """통합용 입력 어댑터. 주먹 지우개는 pen_down과 별도 eraser_active를 쓴다.
+        """Integration input adapter: fist eraser uses eraser_active independently of pen_down.
 
-        UI/메인 루프가 확정한 tool과 보정 좌표만 받는다. GestureState를 변경하지 않는다.
+        Receive only the tool and calibrated coordinates selected by the UI; do not mutate GestureState.
         """
         enabled = eraser_active if tool == 'eraser' else pen_down and tool in ('pen', 'highlighter')
         if cursor is None or not enabled:
@@ -328,7 +328,7 @@ class AirBoardRenderer:
         self.add_point(*cursor)
 
     def erase_stroke_at(self, point: Point, radius: float = 15) -> bool:
-        """접촉한 최상단 획 하나를 지운다. PDF 배경과 다른 획은 보존한다."""
+        """Erase the topmost touched stroke while preserving the PDF background and other strokes."""
         self.end_stroke()
         history = self._history[self.current_page]
         erased = {i for op in history for i in (op.erased_ids or [])}
@@ -356,7 +356,7 @@ class AirBoardRenderer:
         return False
 
     def render_page(self) -> np.ndarray:
-        """UI 없는 BGR 이미지 복사본. 진행 중 획은 원본 상태에 한 번만 합성한다."""
+        """Return a BGR image copy without UI; composite preview ink only once."""
         canvas = self._canvas(self.current_page)
         result = canvas.composed.copy()
         active = self._active
@@ -372,7 +372,7 @@ class AirBoardRenderer:
         return result
 
     def goto_page(self, page: int) -> bool:
-        """0부터 시작하는 페이지로 이동한다. 범위 밖이면 현재 페이지를 유지한다."""
+        """Navigate to a zero-based page; remain on the current page if out of range."""
         if not 0 <= page < self.page_count:
             return False
         self.end_stroke()
@@ -381,11 +381,11 @@ class AirBoardRenderer:
         return True
 
     def change_page(self, offset: int) -> bool:
-        """+1은 다음, -1은 이전 페이지. 현재 작업을 종료한 뒤 이동한다."""
+        """+1 means next page, -1 previous; finish the current operation before navigating."""
         return self.goto_page(self.current_page + offset)
 
     def undo(self) -> bool:
-        """현재 페이지의 마지막 작업을 취소한다. 지우개 작업도 복원한다."""
+        """Undo the last operation on this page, including eraser operations."""
         self.end_stroke()
         history = self._history[self.current_page]
         if not history:
@@ -396,7 +396,7 @@ class AirBoardRenderer:
         return True
 
     def redo(self) -> bool:
-        """현재 페이지에서 마지막으로 취소한 작업을 다시 적용한다."""
+        """Redo the last undone operation on this page."""
         self.end_stroke()
         redo = self._redo_history[self.current_page]
         if not redo:
@@ -408,8 +408,8 @@ class AirBoardRenderer:
         return True
 
     def _rebuild_page(self, canvas: _Canvas, history: list[_Operation]) -> None:
-        """작업 이력으로 현재 페이지의 필기 합성을 다시 만든다."""
-        # 배경 PDF는 캐시를 재사용하고 필기 레이어만 재구성한다.
+        """Reconstruct the current page's ink composition from operation history."""
+        # Reuse the cached PDF background and rebuild only ink layers.
         canvas.color.fill(0)
         canvas.alpha.fill(0)
         canvas.composed[:] = canvas.background
@@ -419,7 +419,7 @@ class AirBoardRenderer:
                 self._replay(canvas, operation)
 
     def clear_page(self) -> None:
-        """현재 페이지의 필기만 지우고 실행 취소가 가능한 작업으로 기록한다."""
+        """Clear current-page ink as an undoable operation."""
         self.end_stroke()
         operation = _Operation(clear=True)
         self._history[self.current_page].append(operation)
@@ -427,24 +427,24 @@ class AirBoardRenderer:
         self._replay(self._canvas(self.current_page), operation)
 
     def operation_count(self, page: int | None = None) -> int:
-        """확정된 작업 수를 반환한다. 내부 이력은 직접 공개하지 않는다."""
+        """Return the count of committed operations without exposing internal history."""
         return len(self._history[self.current_page if page is None else page])
 
     def save_png(self, path: str | Path) -> Path:
-        """현재 페이지를 PNG로 저장한다. Windows 한글 경로도 지원한다."""
+        """Save the current page to PNG, including Unicode paths on Windows."""
         path = Path(path).resolve()
         if path.suffix.lower() != '.png':
-            raise ValueError('PNG 출력 확장자는 .png 이어야 합니다.')
+            raise ValueError('PNG output must use the .png extension.')
         self.end_stroke()
         success, encoded = cv2.imencode('.png', self.render_page())
         if not success:
-            raise OSError('PNG 인코딩 실패')
+            raise OSError('PNG encoding failed')
         self._atomic_write(path, encoded.tobytes())
         return path
 
     @staticmethod
     def _atomic_write(path: Path, content: bytes) -> None:
-        """완성된 파일만 대상 경로로 이동한다."""
+        """Move only completed output files into the destination."""
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(dir=path.parent, suffix=path.suffix)
         try:
@@ -455,16 +455,16 @@ class AirBoardRenderer:
             Path(temporary).unlink(missing_ok=True)
 
     def save_pdf(self, path: str | Path) -> Path:
-        """전체 페이지를 합성 이미지 PDF로 저장. 원본/현재 페이지는 보존한다.
+        """Export all pages as an image-composited PDF without altering source/current page.
 
-        출력은 래스터 PDF이며 원본 텍스트 검색/링크/개별 획 편집은 보존하지 않는다.
-        각 페이지의 표시 크기와 회전된 방향을 유지한다. 내보내기는 동기식이다.
+        The raster PDF does not retain original searchable text, links, or separately editable strokes.
+        Preserve displayed page sizes and rotation; export runs synchronously.
         """
         path = Path(path).resolve()
         if path.suffix.lower() != '.pdf':
-            raise ValueError('PDF 출력 확장자는 .pdf 이어야 합니다.')
+            raise ValueError('PDF output must use the .pdf extension.')
         if path == self.pdf_path:
-            raise ValueError('원본 PDF와 다른 이름으로 저장하세요.')
+            raise ValueError('Choose an output file different from the original PDF.')
         self.end_stroke()
         output = pymupdf.open()
         try:
@@ -472,7 +472,7 @@ class AirBoardRenderer:
                 canvas = self._canvas(index)
                 success, encoded = cv2.imencode('.png', canvas.composed)
                 if not success:
-                    raise OSError('페이지 PNG 인코딩 실패')
+                    raise OSError('Page PNG encoding failed')
                 rect = self.doc[index].rect
                 page = output.new_page(width=rect.width, height=rect.height)
                 page.insert_image(page.rect, stream=encoded.tobytes(), keep_proportion=False)
@@ -483,7 +483,7 @@ class AirBoardRenderer:
 
     @property
     def document_key(self) -> str:
-        """PDF 내용으로 구분하므로 같은 이름의 다른 PDF와 상태가 섞이지 않는다."""
+        """Use PDF contents to distinguish sessions for different files with the same filename."""
         if not hasattr(self, '_document_key'):
             digest = hashlib.sha256()
             with self.pdf_path.open('rb') as stream:
@@ -493,7 +493,7 @@ class AirBoardRenderer:
         return self._document_key
 
     def save_session(self, path: str | Path) -> None:
-        """현재 페이지와 편집 이력을 원자적으로 저장한다. 진행 획도 보존한다."""
+        """Atomically save the current page and edit history, including in-progress ink."""
         history = [[asdict(op) for op in page] for page in self._history]
         if self._active is not None and self._active.stroke.points:
             active = self._active
@@ -504,23 +504,23 @@ class AirBoardRenderer:
         self._atomic_write(Path(path),json.dumps(data,allow_nan=False).encode('utf-8'))
 
     def load_session(self, path: str | Path) -> None:
-        """검증된 JSON만 복원한다. 실패하면 현재 필기 상태를 변경하지 않는다."""
+        """Restore only validated JSON; leave current ink unchanged on failure."""
         try:
             data=json.loads(Path(path).read_text(encoding='utf-8'))
             if (data['version']!=1 or data['document']!=self.document_key
                     or data['render_size']!=[self.config.max_width,self.config.max_height]):
-                raise ValueError('PDF 또는 렌더링 크기가 저장 상태와 다릅니다.')
+                raise ValueError('PDF or rendering dimensions do not match the saved session.')
             page=data['current_page']
             if type(page) is not int or not 0<=page<self.page_count:
-                raise ValueError('잘못된 페이지 번호')
+                raise ValueError('Invalid page number')
             raw=data['history']
             if not isinstance(raw,list) or len(raw)!=self.page_count:
-                raise ValueError('잘못된 페이지 이력')
+                raise ValueError('Invalid page history')
             history=[]
             next_id=0
             for index,operations in enumerate(raw):
                 if not isinstance(operations,list):
-                    raise ValueError('잘못된 작업 목록')
+                    raise ValueError('Invalid operation list')
                 restored=[]
                 if not operations:
                     history.append(restored)
@@ -542,19 +542,19 @@ class AirBoardRenderer:
                             or type(stroke.stroke_id) is not int or stroke.stroke_id<1
                             or not math.isfinite(stroke.width) or not 0<stroke.width<=10000
                             or not math.isfinite(opacity) or not 0<opacity<=1):
-                        raise ValueError('잘못된 획 속성')
+                        raise ValueError('Invalid stroke attributes')
                     color_bgr(stroke.color)
                     points=[]
                     for x,y in stroke.points:
                         if not(math.isfinite(x) and math.isfinite(y) and 0<=x<w and 0<=y<h):
-                            raise ValueError('잘못된 획 좌표')
+                            raise ValueError('Invalid stroke coordinates')
                         points.append((float(x),float(y)))
                     stroke.points=points
                     next_id=max(next_id,stroke.stroke_id)
                     restored.append(_Operation(stroke,opacity))
                 history.append(restored)
         except (KeyError,TypeError,ValueError,OverflowError) as exc:
-            raise ValueError(f'필기 저장 파일을 복원할 수 없습니다: {path}') from exc
+            raise ValueError(f'Could not restore the saved ink session: {path}') from exc
         self._active=None
         self._history=history
         self._next_id=next_id
@@ -563,7 +563,7 @@ class AirBoardRenderer:
         self._canvas(page)
 
     def close(self) -> None:
-        """PDF와 캐시를 해제한다. 파일은 저장하지 않으므로 종료 전 별도 저장한다."""
+        """Release PDF and caches without saving; save separately before closing."""
         if not self._closed:
             self._active = None
             self._cache.clear()
@@ -571,9 +571,9 @@ class AirBoardRenderer:
             self._closed = True
 
     def __enter__(self) -> AirBoardRenderer:
-        """with 구문 지원."""
+        """Support context-manager usage."""
         return self
 
     def __exit__(self, *_: object) -> None:
-        """with 종료 시 자원 해제."""
+        """Release resources on context-manager exit."""
         self.close()

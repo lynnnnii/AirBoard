@@ -1,4 +1,4 @@
-"""기존 smoothing 설정을 유지하면서 render 기본 설정과 작은 테스트 PDF를 준비한다."""
+"""Prepare default render settings and a small test PDF while preserving smoothing configuration."""
 from pathlib import Path
 import json
 import pymupdf
@@ -13,7 +13,7 @@ RENDER_DEFAULTS = {
 
 
 def main() -> None:
-    """기존 키의 값은 바꾸지 않고 없는 render 키만 추가한다."""
+    """Add missing render keys without changing existing configuration values."""
     path = ROOT / 'config' / 'default.json'
     config = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
     previous = config.get('render', {})
@@ -37,9 +37,9 @@ def main() -> None:
             'SWIPE_RIGHT': 'page_next',
             'SWIPE_LEFT': 'page_prev',
         }, indent=2) + '\n', encoding='utf-8')
-    print(f'설정 준비 완료: {path}')
-    print(f'테스트 PDF: {pdf_path}')
-    print('기존 smoothing 설정과 기존 render 값은 유지했습니다.')
+    print(f'Configuration ready: {path}')
+    print(f'Test PDF: {pdf_path}')
+    print('Existing smoothing and render settings were preserved.')
 
 
 if __name__ == '__main__':

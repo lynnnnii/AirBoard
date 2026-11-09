@@ -1,4 +1,4 @@
-"""웹캠/GUI 없이 실제 PDF와 픽셀을 검사하는 회귀 테스트."""
+"""Regression tests against actual PDF pixels without a webcam or GUI."""
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,9 +10,9 @@ from airboard.render import AirBoardRenderer, RenderConfig
 
 
 class RenderTests(unittest.TestCase):
-    """소스 보존, 마스크 합성, 이력, 페이지와 저장을 검증한다."""
+    """Verify source preservation, mask compositing, history, pages, and exports."""
     def setUp(self) -> None:
-        """색이 있는 PDF와 크기/회전이 다른 두 번째 페이지를 준비한다."""
+        """Create a colored PDF with a second page of different size and rotation."""
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.source = self.root / 'source.pdf'
@@ -27,19 +27,19 @@ class RenderTests(unittest.TestCase):
         self.board = AirBoardRenderer(self.source, self.config)
 
     def tearDown(self) -> None:
-        """자원을 해제한다."""
+        """Release resources."""
         self.board.close()
         self.temp.cleanup()
 
     def stroke(self, tool: str, points: list[tuple[int, int]]) -> None:
-        """한 작업을 확정한다."""
+        """Commit one operation."""
         self.board.begin_stroke(tool)
         for point in points:
             self.board.add_point(*point)
         self.board.end_stroke()
 
     def test_pen_dot_and_undo(self) -> None:
-        """한 점도 그려지며 undo가 원본을 정확히 복원한다."""
+        """Single points render correctly and undo restores the exact original."""
         bg = self.board.render_page()
         self.stroke('pen', [(40, 40)])
         np.testing.assert_array_equal(self.board.render_page()[40, 40], [0, 0, 255])
@@ -48,7 +48,7 @@ class RenderTests(unittest.TestCase):
         self.assertFalse(self.board.undo())
 
     def test_highlighter_preview_does_not_accumulate(self) -> None:
-        """동일 획의 중복 점/반복 렌더링은 형광펜을 더 진하게 하지 않는다."""
+        """Duplicate points and repeated rendering must not darken the same highlighter stroke."""
         bg = self.board.render_page()
         self.board.begin_stroke('highlighter')
         for point in [(30, 60), (150, 60), (150, 60), (150, 60)]:
@@ -62,7 +62,7 @@ class RenderTests(unittest.TestCase):
         np.testing.assert_allclose(self.board.render_page(), preview, atol=1)
 
     def test_partial_eraser_preserves_pdf_and_undo(self) -> None:
-        """빠른 지우개 이동도 연속해서 지우고 undo로 복원한다."""
+        """Fast eraser movement removes connected strokes and can be undone."""
         bg = self.board.render_page()
         self.stroke('pen', [(20, 70), (250, 70)])
         before = self.board.render_page()
@@ -76,7 +76,7 @@ class RenderTests(unittest.TestCase):
         np.testing.assert_array_equal(self.board.render_page(), bg)
 
     def test_pages_survive_cache_eviction(self) -> None:
-        """다른 페이지를 방문해 캐시에서 빠져도 획/지우개 이력이 유지된다."""
+        """Stroke and eraser history survives cache eviction after navigating pages."""
         self.stroke('pen', [(20, 70), (250, 70)])
         self.stroke('eraser', [(100, 70)])
         first = self.board.render_page()
@@ -88,7 +88,7 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(self.board.operation_count(), 2)
 
     def test_tracking_loss_and_tool_change_split_strokes(self) -> None:
-        """입력 소실/페이지 이동/도구 전환 시 획이 안전하게 끊긴다."""
+        """Strokes end safely on tracking loss, page changes, and tool changes."""
         self.board.update((20, 20), 'pen', True)
         self.board.update(None, 'pen', True)
         self.board.update((100, 20), 'pen', True)
@@ -98,7 +98,7 @@ class RenderTests(unittest.TestCase):
         self.assertFalse(self.board.add_point(5, 5))
 
     def test_eraser_is_independent_from_pinch(self) -> None:
-        """pen_down=False인 주먹 지우개도 명시적 활성 상태에서 작동한다."""
+        """Fist erasing works when explicitly active, even if pen_down=False."""
         bg = self.board.render_page()
         self.stroke('pen', [(60, 60)])
         self.board.update((60, 60), 'eraser', False, eraser_active=True)
@@ -106,7 +106,7 @@ class RenderTests(unittest.TestCase):
         np.testing.assert_array_equal(self.board.render_page()[60, 60], bg[60, 60])
 
     def test_clear_is_undoable(self) -> None:
-        """전체 필기 삭제도 원본은 유지하고 undo 가능하다."""
+        """Clearing all ink preserves the source and remains undoable."""
         bg = self.board.render_page()
         self.stroke('pen', [(20, 30)])
         before = self.board.render_page()
@@ -116,7 +116,7 @@ class RenderTests(unittest.TestCase):
         np.testing.assert_array_equal(self.board.render_page(), before)
 
     def test_invalid_coordinates_end_stroke(self) -> None:
-        """잘못된 좌표를 화면 가장자리로 연결하지 않는다."""
+        """Invalid positions must not connect lines to the screen edge."""
         self.board.begin_stroke('pen')
         self.board.add_point(10, 10)
         self.assertFalse(self.board.add_point(float('nan'), 20))
@@ -124,13 +124,13 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(self.board.operation_count(), 1)
 
     def test_pdf_cache_reuses_page(self) -> None:
-        """프레임 렌더링은 PDF 재렌더링을 수행하지 않는다."""
+        """Rendering an output frame must not re-render the underlying PDF."""
         with patch.object(pymupdf.Page, 'get_pixmap', side_effect=AssertionError('cache miss')):
             for _ in range(10):
                 self.board.render_page()
 
     def test_export_all_pages_and_unicode_paths(self) -> None:
-        """전체 페이지 수, 크기/회전, 픽셀과 현재 위치/원본 보존을 검사한다."""
+        """Check page count, size/rotation, pixels, and preservation of the current page/source."""
         original_bytes = self.source.read_bytes()
         self.stroke('pen', [(40, 40)])
         first = self.board.render_page()

@@ -1,4 +1,4 @@
-"""획 단위 지우개 회귀 테스트 (임준서 features/coordinate-ui e39f28c의 test_requested_changes.py에서 가져옴)."""
+"""Stroke eraser regression test (adapted from Junseo Lim's test_requested_changes.py, features/coordinate-ui e39f28c)."""
 import unittest
 import tempfile
 from pathlib import Path

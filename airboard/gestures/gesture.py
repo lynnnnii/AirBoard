@@ -1,14 +1,14 @@
 """
-AirBoard - 제스처 판정 모듈 (담당: Kim Hyunbo)
+AirBoard gesture recognition module (contributor: Kim Hyunbo)
 
-랜드마크 배열만 입력으로 받는 순수 판정 로직. MediaPipe·웹캠 없이 테스트할 수 있다.
-손 인식은 airboard.tracking.HandTracker가 맡는다.
+Pure recognition logic operating on landmark arrays; testable without MediaPipe or a webcam.
+Hand detection is handled by airboard.tracking.HandTracker.
 
-다른 팀원은 GestureRecognizer.update(hands, frame_w, frame_h, t) 결과만 받아서 쓰면 된다.
-  - result.pen_point   : 필기 좌표 (카메라 픽셀 좌표) -> 좌표 변환 담당에게 전달
-  - result.pen_down    : True면 쓰는 중, False면 펜 든 상태
-  - result.pose        : 현재 손 모양 ("PINCH", "FIST", "POINTER", "TWO_FINGERS", "OPEN", "NONE")
-  - result.events      : 이번 프레임에 발생한 1회성 이벤트 ("DOUBLE_CLAP", "SWIPE_LEFT", "SWIPE_RIGHT")
+Other modules should consume only GestureRecognizer.update(hands, frame_w, frame_h, t).
+  - result.pen_point   : Writing position (camera pixels), passed to coordinate mapping
+  - result.pen_down    : True while writing; False when the pen is lifted
+  - result.pose        : Current hand pose ("PINCH", "FIST", "POINTER", "TWO_FINGERS", "OPEN", "NONE")
+  - result.events      : One-shot events triggered in this frame ("DOUBLE_CLAP", "SWIPE_LEFT", "SWIPE_RIGHT")
 """
 
 from collections import deque
@@ -17,18 +17,18 @@ from dataclasses import dataclass, field
 import numpy as np
 
 # ---------------------------------------------------------------------------
-# 랜드마크 번호 (MediaPipe Hands 21개 관절)
-#   0: 손목
-#   1~4  : 엄지 (CMC, MCP, IP, TIP)
-#   5~8  : 검지 (MCP, PIP, DIP, TIP)
-#   9~12 : 중지 / 13~16 : 약지 / 17~20 : 새끼
+# Landmark indices (21 MediaPipe hand joints)
+#   0: wrist
+#   1~4  : thumb (CMC, MCP, IP, TIP)
+#   5~8  : index finger (MCP, PIP, DIP, TIP)
+#   9~12 : middle finger / 13–16: ring finger / 17–20: little finger
 # ---------------------------------------------------------------------------
 WRIST = 0
 THUMB_TIP = 4
 INDEX_MCP, INDEX_TIP = 5, 8
 MIDDLE_MCP = 9
 PINKY_MCP = 17
-FINGERS = {  # 손가락 이름: (MCP, TIP)
+FINGERS = {  # Finger name: (MCP, TIP)
     "index": (5, 8),
     "middle": (9, 12),
     "ring": (13, 16),
@@ -36,59 +36,59 @@ FINGERS = {  # 손가락 이름: (MCP, TIP)
 }
 
 # ---------------------------------------------------------------------------
-# 튜닝 값 (직접 손으로 실험하면서 조정할 것)
+# Tuning parameters (calibrate through hand gesture experiments)
 # ---------------------------------------------------------------------------
 CFG = {
-    # 핀치(필기) 히스테리시스: 비율 = 엄지끝-검지끝 거리 / 손바닥 크기
-    "pinch_on": 0.25,        # 이보다 작아지면 쓰기 시작
-    "pinch_off": 0.35,       # 이보다 커져야 쓰기 멈춤
-    "pinch_frames": 2,       # 이 프레임 수만큼 연속으로 조건을 만족해야 상태 전환
+    # Pinch hysteresis: ratio = thumb–index tip distance / palm size
+    "pinch_on": 0.25,        # Start writing below this threshold
+    "pinch_off": 0.35,       # Stop writing above this threshold
+    "pinch_frames": 2,       # Require this many consecutive frames for a state transition
 
-    # 손가락 폄: 굽힘 비율 = 손목-손가락끝 거리 / 손목-손가락MCP 거리
-    "curl_extended": 1.55,   # 이보다 크면 편 손가락
-    # 손가락 접힘: 손가락끝-손바닥중심 거리 / 손바닥 크기
-    #   주먹을 쥐면 손가락 끝이 손바닥 안쪽으로 들어와 이 값이 작아진다.
-    #   (편 손가락 약 1.6 이상, 핀치할 때 검지 약 0.9~1.2, 주먹 약 0.3~0.7)
-    "fold_tip": 0.8,         # 이보다 작으면 접힌 손가락
-    "fist_min_folded": 5,    # 엄지를 포함한 다섯 손가락이 모두 접혀야 주먹
-    "fist_thumb_fold": 0.9,  # 엄지끝-손바닥 중심 거리가 손바닥 크기 대비 이 값 이하이면 접힘
-    # 검지 뻗음: 검지끝이 검지MCP보다 손가락 방향(손목→중지MCP)으로 얼마나 나가 있는지 / 손바닥 크기
-    #   주먹은 검지 끝이 손바닥 안으로 말려 MCP보다 손목 쪽에 있고 (0 이하),
-    #   핀치(나머지 손가락 접음)는 검지가 C자라 끝이 MCP보다 바깥에 있다 (양수).
-    "fist_index_reach": 0.15,# 이보다 작아야 주먹 (핀치와 구분)
-    "fist_frames": 2,        # 주먹이 이 프레임 이상 유지돼야 지우개로 인정
+    # Finger extension: curl ratio = wrist-to-tip distance / wrist-to-MCP distance
+    "curl_extended": 1.55,   # Extended when above this threshold
+    # Folding ratio = fingertip-to-palm-center distance / palm size
+    #   Fingertips move toward the palm in a fist, reducing this ratio.
+    #   (Extended finger ~1.6+, pinching index ~0.9–1.2, fist ~0.3–0.7)
+    "fold_tip": 0.8,         # Considered folded below this threshold
+    "fist_min_folded": 5,    # Require all five fingers, including the thumb, to be folded
+    "fist_thumb_fold": 0.9,  # Thumb is folded if its tip-to-palm distance / palm size is below this value
+    # Index reach: index-tip projection past index MCP along wrist-to-middle-MCP axis, divided by palm size
+    #   For a fist, the index tip curls toward the wrist behind the MCP (reach <= 0),
+    #   while a pinch leaves the C-shaped index tip beyond its MCP (positive reach).
+    "fist_index_reach": 0.15,# Fist requires reach below this value to distinguish it from pinch
+    "fist_frames": 2,        # Require this many consecutive fist frames before erasing
 
-    # 박수: 양 손바닥 중심 거리 / 평균 손바닥 크기
-    "clap_close": 1.6,       # 이보다 가까우면 손이 맞닿은 것으로 봄
-    "clap_open": 2.0,        # 이보다 멀어져야 다음 박수를 셀 수 있음
-    "clap_near": 3.0,        # 이 거리 안에서 손이 사라지면 '겹쳐서 안 보이는 것'으로 간주
-    "clap_grace": 0.4,       # 가까이 있던 손이 사라진 뒤 이 시간(초)까지는 맞닿은 것으로 처리
-    "clap_window": 1.3,      # 두 번의 박수가 이 시간(초) 안에 있어야 DOUBLE_CLAP
-    "clap_min_gap": 0.12,    # 너무 짧은 간격(같은 박수가 두 번 세지는 것) 무시
-    "clap_cooldown": 1.0,    # DOUBLE_CLAP 직후 이 시간 동안 박수 무시
+    # Clap: palm-center distance / average palm size
+    "clap_close": 1.6,       # Treat palms as touching below this ratio
+    "clap_open": 2.0,        # Require separation beyond this ratio before counting another clap
+    "clap_near": 3.0,        # If hands disappear within this distance, assume temporary overlap/occlusion
+    "clap_grace": 0.4,       # Treat missing nearby hands as touching for this many seconds
+    "clap_window": 1.3,      # Require two claps within this many seconds for DOUBLE_CLAP
+    "clap_min_gap": 0.12,    # Ignore too-short gaps that might count one clap twice
+    "clap_cooldown": 1.0,    # Ignore claps for this many seconds after DOUBLE_CLAP
 
-    # 스와이프: 손을 편 상태에서 손목이 빠르게 좌우로 이동
-    "swipe_window": 0.5,     # 이 시간(초) 동안의 이동량을 봄
-    "swipe_dist": 0.18,      # 이동량이 화면 너비의 이 비율 이상이면 스와이프
-    "swipe_max_slope": 0.7,  # 세로 이동 / 가로 이동이 이보다 크면 스와이프 아님 (대각선 허용)
-    "swipe_open_fingers": 3, # 네 손가락 중 이 개수 이상 펴져 있으면 '손바닥 편 상태'
-    "swipe_open_curl": 1.4,  # 손가락 폄 판정 기준 (스와이프용, 일반 기준보다 느슨)
-    "swipe_open_ratio": 0.6, # 시간 창 안 프레임 중 이 비율 이상이 '손바닥 편 상태'면 인정 (흔들림 허용)
-    "swipe_lost_grace": 0.25,# 빠르게 움직여 손을 잠깐 놓쳐도 이 시간(초)까지는 기록 유지
+    # Swipe: the wrist moves rapidly sideways while the hand is open
+    "swipe_window": 0.5,     # Measure movement over this many seconds
+    "swipe_dist": 0.18,      # Swipe if displacement exceeds this fraction of frame width
+    "swipe_max_slope": 0.7,  # Reject when vertical/horizontal movement ratio exceeds this threshold
+    "swipe_open_fingers": 3, # Open hand requires at least this many of the four fingers extended
+    "swipe_open_curl": 1.4,  # Extension threshold for swipes (looser than normal)
+    "swipe_open_ratio": 0.6, # Require this fraction of window frames to show an open hand (allowing jitter)
+    "swipe_lost_grace": 0.25,# Keep history during brief tracking loss up to this many seconds
     "swipe_cooldown": 0.8,
-    "mode_flash": 0.8,       # NEXT PAGE / PREV PAGE 표시 유지 시간(초)
+    "mode_flash": 0.8,       # NEXT PAGE / PREV PAGE indicator duration (seconds)
 }
 
 
 # ---------------------------------------------------------------------------
-# 기본 계산 함수
+# Basic geometry helpers
 # ---------------------------------------------------------------------------
 def dist(a, b):
     return float(np.linalg.norm(a - b))
 
 
 def palm_size(lm):
-    """손바닥 크기 = 손목(0) ~ 중지 MCP(9) 거리. 카메라와의 거리 보정에 사용."""
+    """Palm size = distance from wrist (0) to middle MCP (9), used for distance normalization."""
     return dist(lm[WRIST, :2], lm[MIDDLE_MCP, :2]) + 1e-6
 
 
@@ -97,36 +97,36 @@ def palm_center(lm):
 
 
 def pinch_ratio(lm):
-    """엄지끝-검지끝 2D 거리를 3D 손바닥 크기로 정규화.
-    분자는 2D: MediaPipe의 손가락 끝 z는 흔들림이 커서, 넣으면 붙여도 비율이 0.3~0.4로 떠 핀치가 안 잡힌다.
-    분모는 3D: 2D 손바닥 크기는 손을 눕히면 짧아져 비율이 커진다. 손목·MCP의 z는 비교적 안정적이다."""
+    """Normalize the 2D thumb-to-index tip distance by the 3D palm size.
+    Use 2D numerator: fingertip z is noisy and may prevent pinch detection even with touching fingertips.
+    The denominator is 3D because palm tilt shortens its 2D projection; wrist/MCP z values are relatively stable."""
     return dist(lm[THUMB_TIP, :2], lm[INDEX_TIP, :2]) / (dist(lm[WRIST], lm[MIDDLE_MCP]) + 1e-6)
 
 
 def finger_curls(lm):
-    """각 손가락의 굽힘 비율. 클수록 펴짐. 손이 기울어져도 동작하도록 y좌표 비교 대신 거리 비율을 쓴다."""
+    """Finger curl ratio: larger indicates extension; use distance ratios rather than y coordinates for tilt robustness."""
     w = lm[WRIST, :2]
     return {name: dist(w, lm[tip, :2]) / (dist(w, lm[mcp, :2]) + 1e-6)
             for name, (mcp, tip) in FINGERS.items()}
 
 
 def tip_to_palm(lm):
-    """각 손가락 끝이 손바닥 중심에서 얼마나 떨어져 있는지 (손바닥 크기로 정규화). 작을수록 접힘."""
+    """Normalized distance of each fingertip from palm center; smaller means more folded."""
     c = palm_center(lm)
     s = palm_size(lm)
     return {name: dist(lm[tip, :2], c) / s for name, (mcp, tip) in FINGERS.items()}
 
 
 def index_reach(lm):
-    """검지끝이 검지MCP보다 손가락 방향(손목→중지MCP)으로 나가 있는 정도. 음수면 손바닥 안으로 말림.
-    손이 기울어져도 동작하도록 화면 y축 대신 손바닥 축에 투영한다."""
+    """Index-tip reach past the MCP along the wrist-to-middle-MCP axis; negative values mean inward curling.
+    Project onto the palm axis rather than screen y for tilt invariance."""
     axis = lm[MIDDLE_MCP, :2] - lm[WRIST, :2]
     s = palm_size(lm)
     return float(np.dot(lm[INDEX_TIP, :2] - lm[INDEX_MCP, :2], axis / s)) / s
 
 
 def classify_pose(lm, curls, tips=None, config=None):
-    """한 손의 정적인 모양 분류 (핀치 여부는 PinchDetector가 따로 판단)."""
+    """Classify static single-hand pose; PinchDetector handles pinches separately."""
     tips = tip_to_palm(lm) if tips is None else tips
     folded = {k: v < CFG["fold_tip"] for k, v in tips.items()}
     extended = {k: v > CFG["curl_extended"] for k, v in curls.items()}
@@ -152,31 +152,31 @@ def classify_pose(lm, curls, tips=None, config=None):
             and sum(folded.values()) >= cfg.get('history_min_folded_fingers', 3)):
         return "THUMB_LEFT"
 
-    # 1) 주먹: 검지가 접혀 있고, 엄지를 포함해 fist_min_folded개 이상 접힘.
-    #    주먹은 엄지·검지 끝도 가까워서 핀치보다 먼저 검사해야 한다.
-    #    나머지 손가락을 접고 핀치하면 검지 끝도 손바닥 중심 가까이 오므로 접힘 조건만으로는 구분이 안 된다.
-    #    그래서 검지 끝이 MCP보다 손바닥 안쪽으로 말려 들어갔는지(index_reach)를 추가로 본다.
+    # 1) Fist: index curled and at least fist_min_folded fingers, including the thumb, folded.
+    #    Check fist before pinch because the thumb/index fingertips can also be close.
+    #    When pinching with other fingers folded, the index tip also approaches palm center, so folding alone is insufficient.
+    #    Also check index_reach to distinguish a truly curled index tip from a pinch.
     thumb_tip_to_palm = dist(lm[THUMB_TIP, :2], palm_center(lm)) / palm_size(lm)
     thumb_folded = thumb_tip_to_palm <= cfg.get("fist_thumb_fold", CFG["fist_thumb_fold"])
     fist_folded_count = sum(folded.values()) + int(thumb_folded)
     if folded["index"] and fist_folded_count >= cfg.get("fist_min_folded", CFG["fist_min_folded"]) \
             and index_reach(lm) < CFG["fist_index_reach"]:
         return "FIST"
-    # 2) 포인터: 검지만 펴고 나머지 접힘 + 엄지와 검지가 떨어져 있음
+    # 2) Pointer: only index extended, other fingers folded, and thumb separated from index
     if extended["index"] and folded["middle"] and folded["ring"] and folded["pinky"] \
             and pinch_ratio(lm) > CFG["pinch_off"]:
         return "POINTER"
-    # 3) 손바닥 펴기: 네 손가락 모두 폄
+    # 3) Open palm: all four fingers extended
     if all(extended.values()):
         return "OPEN"
     return "NONE"
 
 
 # ---------------------------------------------------------------------------
-# 상태 판정기들
+# State detectors
 # ---------------------------------------------------------------------------
 class PinchDetector:
-    """히스테리시스 + 프레임 디바운스로 Pen Down / Pen Up 판정."""
+    """Detect pen-down/up using hysteresis and frame debouncing."""
 
     def __init__(self, config=None):
         self.config = {**CFG, **(config or {})}
@@ -215,10 +215,10 @@ class PinchDetector:
 
 
 class ClapDetector:
-    """양손 손바닥 중심 거리가 가까워졌다 벌어지는 것을 박수 1회로 세고, 짧은 시간 안에 2회면 DOUBLE_CLAP.
+    """Count one clap when palms approach and separate; two claps in a short window trigger DOUBLE_CLAP.
 
-    실제 박수에서는 두 손이 맞닿는 순간 MediaPipe가 한 손 또는 두 손 모두를 놓치는 경우가 많다.
-    그래서 '직전에 두 손이 가까이 있었는데 갑자기 손이 사라짐'도 맞닿음으로 처리한다.
+    When palms touch, MediaPipe often temporarily loses one or both hands.
+    Therefore treat sudden tracking loss after the palms approach as contact.
     """
 
     def __init__(self, config=None):
@@ -268,7 +268,7 @@ class ClapDetector:
         elif (t-self.last_near_t<cfg['clap_grace'] and self.armed
               and (self.approaching or (self.last_d is not None
                    and self.last_d<cfg.get('clap_occlusion_close',2.5)))):
-            # 양손이 가까워지다 가려진 경우만 접촉으로 인정한다.
+            # Count contact only when hands become occluded while approaching.
             self._register_touch(t)
         elif t-self.last_near_t>=cfg.get('clap_reacquire_seconds',.85):
             self.armed=False
@@ -284,14 +284,14 @@ class ClapDetector:
 
 
 class SwipeDetector:
-    """손바닥을 편 상태에서 손이 빠르게 좌우로 이동하면 스와이프.
+    """Detect a swipe from fast lateral movement of an open hand.
 
-    인식률을 높이기 위한 처리
-      - 손목 대신 손바닥 중심을 추적 (더 안정적)
-      - 펼친 한 손의 이동을 판정하며 도구 동작/손 소실 시 이력을 초기화
-      - 짧은 손가락 검출 흔들림은 허용하지만 해당 프레임 좌표는 기록하지 않음
-      - 재입력 방지 시간의 이동은 다음 스와이프 이력에 포함하지 않음
-      - 세로 이동은 절대값이 아니라 가로 이동 대비 비율로 제한 (약간 대각선이어도 인정)
+    Measures to improve recognition reliability
+      - Track the palm center rather than wrist (more stable)
+      - Detect movement of one open hand; reset history on tool actions or tracking loss
+      - Tolerate brief finger-pose jitter without recording those frame coordinates
+      - Exclude cooldown movement from the next swipe history
+      - Limit vertical movement as a fraction of horizontal movement to allow diagonal swipes
     """
 
     def __init__(self, config=None):
@@ -299,15 +299,15 @@ class SwipeDetector:
         self.hist = deque()          # (t, x, y, is_open)
         self.last_seen = -1e9
         self.cooldown_until = 0.0
-        self._last_swipe = None      # (방향, 시각) 반대 방향 되돌림 무시용
+        self._last_swipe = None      # (direction, time) Used to ignore reverse movement when returning the hand
 
     def update(self, point, is_open, frame_w, frame_h, t):
-        # 도구 동작·양손·손 소실 구간의 이동을 스와이프 이력에 섞지 않는다.
+        # Do not mix tool actions, two-hand frames, or tracking gaps into swipe history.
         if point is None or t < self.cooldown_until:
             self.hist.clear()
             return None
         if not is_open:
-            # 잠깐의 손가락 검출 흔들림은 넘기되 도구 입력은 호출자가 None으로 차단한다.
+            # Allow brief finger-pose noise; the caller suppresses tool input by passing None.
             if t-self.last_seen > self.config.get('swipe_open_grace', .1):
                 self.hist.clear()
             return None
@@ -326,8 +326,8 @@ class SwipeDetector:
         if abs(dx) > self.config["swipe_dist"] and dy < self.config["swipe_max_slope"] * abs(dx):
             self.hist.clear()
             event = "SWIPE_RIGHT" if dx > 0 else "SWIPE_LEFT"
-            # 스와이프 뒤 손을 제자리로 되돌리는 동작이 반대 방향 스와이프로 잡히지 않게,
-            # swipe_reverse_guard 초 동안은 반대 방향을 무시한다 (같은 방향 연속 스와이프는 그대로 허용).
+            # To avoid interpreting hand return motion after a swipe as an opposite swipe,
+            # ignore reverse movement for swipe_reverse_guard seconds (repeated same-direction swipes remain allowed).
             if (self._last_swipe is not None and event != self._last_swipe[0]
                     and t - self._last_swipe[1] < self.config.get('swipe_reverse_guard', 0.)):
                 return None
@@ -338,22 +338,22 @@ class SwipeDetector:
 
 
 # ---------------------------------------------------------------------------
-# 결과 구조체와 메인 인식기
+# Result structure and main recognizer
 # ---------------------------------------------------------------------------
 @dataclass
 class GestureResult:
-    hands: list = field(default_factory=list)   # 각 손의 (21,3) 픽셀 좌표 배열
-    main_hand: np.ndarray = None                 # 필기에 쓰는 손 (가장 크게 보이는 손)
+    hands: list = field(default_factory=list)   # (21, 3) pixel coordinate array for each hand
+    main_hand: np.ndarray = None                 # Drawing hand (the largest visible hand)
     pose: str = "NONE"                           # PINCH / FIST / POINTER / TWO_FINGERS / OPEN / NONE
-    pen_down: bool = False                       # True = 쓰는 중 (화면에는 WRITE ON으로 표시)
-    pen_point: tuple = None                      # 필기 좌표 (엄지끝과 검지끝의 중간점)
-    pointer_point: tuple = None                  # 검지 끝 좌표 (포인터·지우개 위치)
+    pen_down: bool = False                       # True = Writing (displayed as WRITE ON)
+    pen_point: tuple = None                      # Drawing point (midpoint between thumb and index tips)
+    pointer_point: tuple = None                  # Index fingertip coordinates (pointer/eraser position)
     events: list = field(default_factory=list)   # DOUBLE_CLAP, SWIPE_LEFT, SWIPE_RIGHT
-    debug: dict = field(default_factory=dict)    # 튜닝용 수치 (핀치 비율, 굽힘 비율 등)
+    debug: dict = field(default_factory=dict)    # Tuning values (pinch ratio, curl ratio, etc.)
 
 
 class GestureRecognizer:
-    """랜드마크 리스트를 받아 프레임마다 GestureResult를 낸다."""
+    """Produce a GestureResult per frame from the landmark arrays."""
 
     def __init__(self, config=None):
         self.pinch = PinchDetector(config)
@@ -364,15 +364,15 @@ class GestureRecognizer:
         self.swipe = SwipeDetector(config)
         self.fist_count = 0
         self._last_ink_point = None
-        self._prev_pose = 'NONE'     # 직전 프레임 자세 (검지 자세 유지 판정용)
+        self._prev_pose = 'NONE'     # Previous frame pose (used for stable index-gesture recognition)
         self._prev_history_pose = None
         self._history_cooldown_until = float('-inf')
 
     def update(self, hands, frame_w, frame_h, t):
-        """hands: HandTracker.detect() 결과 (손마다 (21,3) 픽셀 좌표). t: 초 단위 시각."""
+        """hands: output of HandTracker.detect() ((21, 3) pixels per hand); t: time in seconds."""
         r = GestureResult(hands=hands)
 
-        # 박수는 양손 정보로 먼저 판단
+        # Detect claps first using both hands
         if self.clap.update(hands, t):
             r.events.append("DOUBLE_CLAP")
         if len(hands)>=2 or 'DOUBLE_CLAP' in r.events:
@@ -392,7 +392,7 @@ class GestureRecognizer:
             r.debug = {"hand_count": 0, "clap_touch": self.clap.touching, "clap_count": len(self.clap.claps)}
             return r
 
-        # 필기 손 = 가장 크게 보이는 손 (카메라에 가장 가까운 발표자 손)
+        # Writing hand = largest visible hand (closest to camera)
         lm = max(hands, key=palm_size)
         r.main_hand = lm
         curls = finger_curls(lm)
@@ -406,22 +406,22 @@ class GestureRecognizer:
         else:
             self._prev_history_pose = None
         ratio = pinch_ratio(lm)
-        # 아래 두 판정은 UI가 매핑을 보고 켤 때만 쓴다. 핀치로 쓰는 기본 설정에서는 원래 판정과 똑같이 동작해야 한다.
-        #  - index_writing: 검지로 쓰는 설정 (검지 자세 유지 + ✌️ 인식)
-        #  - two_fingers: ✌️를 다른 동작에 연결한 설정 (✌️ 인식만)
-        # 두 판정 모두 엄지가 검지에 붙은 핀치 시작 구간(pinch_on 미만)과 핀치 중에는 끼어들지 않고,
-        # 핀치 판정기를 막지도 않는다. 그래서 검지로 쓰다가도 엄지를 붙이면 바로 핀치로 넘어간다.
+        # Enable the two checks below only when configured by UI gesture mapping; preserve normal pinch behavior otherwise.
+        #  - index_writing: Index drawing mode (held index pose + two-finger recognition)
+        #  - two_fingers: Two-finger gesture mapped to another action (recognize two fingers only)
+        # Neither check interrupts the start of a pinch (ratio below pinch_on) or an active pinch,
+        # nor blocks the pinch detector. Pinching while using index drawing switches immediately to pinch.
         index_mode = self.config.get('index_writing', False)
         pinch_free = not self.pinch.down and ratio > self.config['pinch_on']
-        # 검지·중지 두 손가락 펴기(✌️): 검지로 쓰다가 펜을 드는 '멈춤' 제스처. 약지·새끼는 접혀 있어야 한다.
-        # 두 손가락 사이 간격은 보지 않는다.
+        # Two-finger extension (index and middle): stop writing in index drawing mode; ring and little fingers must be folded.
+        # Finger separation distance is not checked.
         two = self.config.get('two_finger_curl', CFG['curl_extended'])
         if ((index_mode or self.config.get('two_fingers', False)) and pinch_free and pose == 'NONE'
                 and curls['index'] > two and curls['middle'] > two
                 and all(tips[k] < self.config.get('two_finger_fold', CFG['fold_tip']) for k in ('ring', 'pinky'))):
             pose = 'TWO_FINGERS'
-        # 검지 자세가 이어지는 중에는 기준을 느슨하게 유지한다(히스테리시스). 글씨를 쓸 때는 검지가 살짝 굽고
-        # 엄지가 검지 쪽에 붙기 쉬워서, 처음 판정 기준(검지 펴짐 1.55, 엄지 간격 0.38)을 계속 요구하면 자꾸 끊긴다.
+        # Relax the recognition threshold while the index pose is held (hysteresis). During writing, the index bends slightly
+        # and thumb approaches it; strict initial thresholds (extension 1.55, thumb gap 0.38) would cause interruptions.
         kept_pointer = (index_mode and pinch_free and pose == 'NONE' and self._prev_pose == 'POINTER'
                         and curls['index'] > self.config.get('pointer_keep_curl', CFG['curl_extended'])
                         and all(tips[k] < self.config.get('pointer_keep_fold', CFG['fold_tip'])
@@ -430,11 +430,11 @@ class GestureRecognizer:
         if kept_pointer:
             pose = 'POINTER'
 
-        # 쓰는 중 닫힌 핀치는 유지한다. 지우개 전환은 pen-up 후에만 허용한다.
+        # Maintain an active pinch while writing; allow eraser switching only after pen-up.
         if (pose=='FIST' and self.pinch.down
                 and ratio<=self.pinch.config['pinch_off']):
             pose='NONE'
-        # 핀치한 손의 나머지 손가락을 접는 자세와 주먹을 구분한다.
+        # Distinguish a fist from a pinch with other fingers folded.
         if pose=='FIST' and tips['index']>self.config.get('fist_index_fold',.65):
             pose='NONE'
         fist_candidate = pose=="FIST"
@@ -443,7 +443,7 @@ class GestureRecognizer:
         if pose == "FIST" and not is_fist:
             pose = "NONE"
 
-        # 양손이 보이면(박수 중일 수 있음) 필기를 막는다
+        # Suppress drawing when both hands appear (possibly clapping)
         r.pen_down = self.pinch.update(
             ratio, blocked=(pose == "FIST" or ink_busy or (fist_candidate and not self.pinch.down)),
             observe_release=(ink_busy and len(hands)==1 and not fist_candidate))
@@ -455,10 +455,10 @@ class GestureRecognizer:
         self._prev_pose = pose
 
         r.pen_point = tuple(((lm[THUMB_TIP, :2] + lm[INDEX_TIP, :2]) / 2).astype(int))
-        # 해제 확인 중이거나, 손가락이 벌어지기 시작하면(비율 > pinch_hold) 손 이동을 잉크에 추가하지 않는다.
-        # 펜이 실제로 들리기(pinch_off) 전에 손을 떼면서 움직인 길이 선으로 남지 않게 한다.
-        # pinch_hold는 핀치로 쓸 때만 쓴다(pinch_writing, UI가 매핑을 보고 끈다). 핀치를 지우개 등에 연결했을 때
-        # 손가락을 살짝 벌렸다고 지우개 위치까지 멈추면 안 되기 때문이다. 해제 확인 중 고정은 원래 동작 그대로 둔다.
+        # During release confirmation or when fingers begin opening (ratio > pinch_hold), do not add hand movement to ink.
+        # Prevent unwanted tails while releasing the pinch before the pen-up threshold (pinch_off).
+        # Apply pinch_hold only when drawing with pinch (pinch_writing, configurable by UI). When pinch is mapped to eraser, 
+        # slight finger opening must not freeze eraser motion. Keep the existing release-confirmation hold behavior.
         hold = self.config.get('pinch_hold') if self.config.get('pinch_writing', True) else None
         lifting = self.pinch.count>0 or (hold is not None and ratio>hold)
         if r.pen_down:
@@ -471,7 +471,7 @@ class GestureRecognizer:
         r.pointer_point = tuple(lm[INDEX_TIP, :2].astype(int)) if pose != "FIST" \
             else tuple(palm_center(lm).astype(int))
 
-        # 페이지 이동 제스처 제거: 손을 움직여도 스와이프 이벤트를 발생시키지 않는다.
+        # Page-swipe gestures are disabled; hand motion must not emit swipe events.
         r.debug = {"hand_count": len(hands),
                    "swipe_open_count": 0,
                    "clap_ink_blocked": ink_busy,

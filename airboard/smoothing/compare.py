@@ -1,11 +1,11 @@
 """
-떨림 보정 비교 화면 (담당: Lee Subin)
+Smoothing comparison demo (contributor: Lee Subin)
 
-실행: python -m airboard.smoothing.compare
-엄지·검지를 붙이면 쓰기, 떼면 멈춤. 같은 손 움직임을 세 가지 보정으로 동시에 그린다.
-  빨강 = 보정 없음, 노랑 = EMA, 초록 = One Euro (초기값은 config/default.json)
-손을 가만히 들고 있으면 왼쪽 위 jitter 값(최근 30프레임 흔들림, px)으로 보정 효과를 비교할 수 있다.
-키: 1/2/3 선 보이기·숨기기, t 꼬리 제거 켜기·끄기, c 지우기, q/ESC 종료 (창을 닫아도 종료)
+Run: python -m airboard.smoothing.compare
+Pinch to draw, release to stop; render the same motion using three smoothing methods.
+  Red = no filtering, yellow = EMA, green = One Euro (defaults in config/default.json)
+Hold the hand still and compare the top-left jitter metrics (RMS motion across the latest 30 frames).
+Keys: 1/2/3 toggle traces, t toggle tail trimming, c clear, q/Esc quit (closing the window also exits).
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ COLORS = {"none": (0, 0, 255), "ema": (0, 220, 255), "one_euro": (0, 200, 0)}
 
 
 def jitter(points: collections.deque) -> float:
-    """최근 점들이 평균 위치에서 얼마나 흩어져 있는지 (RMS, px)."""
+    """RMS dispersion of recent points around their mean (pixels)."""
     if len(points) < 2:
         return 0.0
     arr = np.array(points)
@@ -77,18 +77,18 @@ def draw(frame: np.ndarray, results: dict[str, SmoothResult], done: dict[str, li
 
 def main() -> None:
     if not os.path.exists(DEFAULT_MODEL):
-        print("[오류] models/hand_landmarker.task 파일이 없습니다.")
+        print("[Error] Missing models/hand_landmarker.task.")
         return
     cfg = load_config()
-    print("모델 불러오는 중...")
+    print("Loading model...")
     tracker = HandTracker()
     rec = GestureRecognizer()
-    print("카메라 여는 중...")
+    print("Opening camera...")
     cap = open_camera(0)
     if cap is None:
-        print("[오류] 카메라를 열 수 없습니다. 다른 프로그램이 쓰고 있는지 확인하세요.")
+        print("[Error] Could not open the camera. Check whether another application is using it.")
         return
-    print(f"실행 중입니다. '{WIN}' 창에서 q 또는 ESC를 누르면 종료됩니다.")
+    print(f"Running. Press q or Esc in the '{WIN}' window to quit.")
 
     smoothers = {m: StrokeSmoother.from_config(cfg, method=m) for m in METHODS}
     done: dict[str, list[list[Point]]] = {m: [] for m in METHODS}
@@ -102,7 +102,7 @@ def main() -> None:
         ok, frame = cap.read()
         if not ok:
             break
-        frame = cv2.flip(frame, 1)      # 거울 모드
+        frame = cv2.flip(frame, 1)      # Mirrored camera view
         t = time.monotonic()
         read_trackbars(smoothers)
         r = rec.update(tracker.detect(frame), frame.shape[1], frame.shape[0], t)
@@ -122,7 +122,7 @@ def main() -> None:
         cv2.imshow(WIN, frame)
 
         key = cv2.waitKey(1) & 0xFF
-        # 창의 X 버튼으로 닫아도 종료 (안 그러면 창만 사라지고 카메라를 계속 잡고 있음)
+        # Exit when the window's close button is used; otherwise camera capture would continue.
         if key in (ord("q"), 27) or cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1:
             break
         if key == ord("c"):

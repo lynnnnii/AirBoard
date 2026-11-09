@@ -1,26 +1,26 @@
 """
-떨림 보정 + 획 꼬리 제거 (담당: Lee Subin)
+Jitter smoothing and stroke-tail trimming (contributor: Lee Subin)
 
-필기 좌표와 pen_down을 매 프레임 넣으면 보정된 커서 좌표와 획을 돌려준다.
-좌표 단위는 상관없다 (카메라 픽셀이든 슬라이드 픽셀이든 2D 점이면 됨).
+Provide coordinates and pen_down each frame to obtain smoothed cursor positions and strokes.
+Any 2D coordinate units work, including camera or slide pixels.
 
-  smoother = StrokeSmoother.from_config(load_config())   # config/default.json의 "smoothing"
+  smoother = StrokeSmoother.from_config(load_config())   # The "smoothing" section of config/default.json
   s = smoother.update(point, pen_down, t)
-  - s.point    : 보정된 커서 좌표 (손이 없으면 None) -> 커서 그리기
-  - s.stroke   : 지금 쓰고 있는 획의 점 목록 (안 쓰는 중이면 None) -> 실시간 렌더링
-  - s.finished : 이번 프레임에 끝난 획 (꼬리 제거 완료, 없으면 None) -> 필기 레이어에 확정
+  - s.point    : Smoothed cursor position (None when the hand is missing) for cursor rendering
+  - s.stroke   : Current stroke points (None if not drawing) for live rendering
+  - s.finished : Completed stroke with tail trimmed (or None) for committing to the ink layer
 
-꼬리 제거
-  - 시작 꼬리: 펜을 내린 직후 start_skip 프레임을 버린다.
-  - 끝 꼬리: 핀치를 떼는 동안 손끝이 먼저 움직이고, 비율이 pinch_off를 넘고 유지 프레임이 지나야
-    pen_down이 False가 된다. 그래서 끝 꼬리는 상태가 바뀌기 '전에' 이미 획에 들어가 있으므로,
-    펜을 든 순간 마지막 end_trim개 점을 거슬러 지운다.
+Tail trimming
+  - Start tail: discard the first start_skip frames after pen-down.
+  - End tail: fingertip motion precedes pen-up while releasing a pinch; the ratio must exceed pinch_off
+    for enough frames before pen_down becomes False. Thus tail points enter the stroke before state changes,
+    so remove the last end_trim points when lifting the pen.
 
-곡선 보간 (spline=True)
-  웹캠이 초당 10여 장이라 보정된 점 사이를 직선으로 이으면 둥근 글씨가 각져 보인다.
-  점 사이를 Catmull-Rom 곡선으로 촘촘히 채운다. 곡선의 한 구간은 다음 점이 있어야 정해지므로
-  진행 중인 획은 마지막 한 점 뒤까지만 그려지고(한 프레임 늦음), 펜을 들면 끝까지 채운다.
-  이미 내보낸 점은 바뀌지 않으므로 렌더러는 새 점만 이어 그리면 된다.
+Curve interpolation (spline=True)
+  At low webcam frame rates, straight interpolation makes curved handwriting angular.
+  Fill gaps with Catmull-Rom splines. Each curve segment needs a subsequent point,
+  so an active stroke is rendered one point behind; complete the remaining segment at pen-up.
+  Previously emitted points remain fixed, so the renderer only needs to append new points.
 """
 
 from __future__ import annotations
@@ -42,16 +42,16 @@ DEFAULTS: dict[str, Any] = {
     "one_euro_d_cutoff": 1.0,
     "start_skip": 2,
     "end_trim": 3,
-    "spline": False,             # True면 점 사이를 곡선으로 채운다
+    "spline": False,             # If True, interpolate curves between points
 }
 
 Point = tuple[float, float]
-SPLINE_STEP = 3.0                # 곡선 위 점 간격(좌표 단위, 보통 슬라이드 px)
+SPLINE_STEP = 3.0                # Distance between spline sample points (typically slide pixels)
 SPLINE_MAX_STEPS = 12
 
 
 def _catmull_rom(p0: Point, p1: Point, p2: Point, p3: Point) -> list[Point]:
-    """p1→p2 구간을 곡선으로 채운 점들 (p1 제외, p2 포함). p0, p3은 곡선 방향을 정하는 이웃 점."""
+    """Points along p1 to p2 (excluding p1, including p2); p0 and p3 set tangent directions."""
     length = ((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2) ** .5
     n = min(SPLINE_MAX_STEPS, max(1, int(length / SPLINE_STEP + .999)))
     out = []
@@ -64,7 +64,7 @@ def _catmull_rom(p0: Point, p1: Point, p2: Point, p3: Point) -> list[Point]:
 
 
 def densify(points: list[Point]) -> list[Point]:
-    """점 목록 전체를 곡선으로 채운다. 양 끝은 끝점을 이웃으로 써서 곡선이 튀어 나가지 않게 한다."""
+    """Interpolate the full point sequence; duplicate endpoints to avoid spline overshoot."""
     if len(points) < 2:
         return list(points)
     out = [points[0]]
@@ -76,14 +76,14 @@ def densify(points: list[Point]) -> list[Point]:
 
 
 def load_config(path: str = DEFAULT_CONFIG) -> dict[str, Any]:
-    """config/default.json의 "smoothing" 항목을 기본값 위에 덮어써서 돌려준다."""
+    """Overlay the config/default.json smoothing section onto the default settings."""
     with open(path, encoding="utf-8") as f:
         section = json.load(f).get("smoothing", {})
     return {**DEFAULTS, **section}
 
 
 def make_filter(method: str, cfg: dict[str, Any] | None = None) -> PointFilter:
-    """보정 방식 이름으로 필터를 만든다."""
+    """Construct a filter from its method name."""
     c = {**DEFAULTS, **(cfg or {})}
     if method == "none":
         return NoFilter()
@@ -91,12 +91,12 @@ def make_filter(method: str, cfg: dict[str, Any] | None = None) -> PointFilter:
         return EMAFilter(c["ema_alpha"])
     if method == "one_euro":
         return OneEuroFilter(c["one_euro_min_cutoff"], c["one_euro_beta"], c["one_euro_d_cutoff"])
-    raise ValueError(f"알 수 없는 보정 방식: {method}")
+    raise ValueError(f"Unknown smoothing method: {method}")
 
 
 @dataclass
 class SmoothResult:
-    """한 프레임의 보정 결과."""
+    """Smoothing result for one frame."""
 
     point: Point | None = None
     stroke: list[Point] | None = None
@@ -104,7 +104,7 @@ class SmoothResult:
 
 
 class StrokeSmoother:
-    """필터로 좌표를 보정하고, pen_down 변화에 맞춰 획을 나누고 꼬리를 없앤다."""
+    """Filter coordinates, split strokes on pen_down transitions, and remove tails."""
 
     def __init__(self, point_filter: PointFilter | None = None,
                  start_skip: int = DEFAULTS["start_skip"], end_trim: int = DEFAULTS["end_trim"],
@@ -115,18 +115,18 @@ class StrokeSmoother:
         self.spline = spline
         self.stroke: list[Point] | None = None
         self.skip_left = 0
-        self._ctrl: list[Point] = []      # 곡선 보간 전 보정 점 (spline일 때만 사용)
+        self._ctrl: list[Point] = []      # Filtered control points before spline interpolation (only used for splines)
 
     @classmethod
     def from_config(cls, cfg: dict[str, Any], method: str | None = None) -> StrokeSmoother:
-        """설정값으로 만든다. method를 주면 설정의 method 대신 쓴다 (비교용)."""
+        """Build from config; an explicit method overrides the configured method for comparisons."""
         c = {**DEFAULTS, **cfg}
         return cls(make_filter(method or c["method"], c), c["start_skip"], c["end_trim"], bool(c["spline"]))
 
     def _finish(self) -> list[Point] | None:
         stroke, self.stroke = self.stroke, None
         if self.spline:
-            # 꼬리는 보정 점 기준으로 지우고, 남은 점 전체를 다시 곡선으로 채운다.
+            # Trim filtered control points, then reinterpolate the remaining stroke.
             stroke, self._ctrl = self._ctrl, []
         if self.end_trim > 0 and len(stroke) > self.end_trim + 1:
             stroke = stroke[:-self.end_trim]
@@ -135,7 +135,7 @@ class StrokeSmoother:
         return stroke or None
 
     def _add(self, p: Point) -> None:
-        """획에 보정 점을 더한다. spline이면 이제 모양이 정해진 직전 구간을 곡선으로 채워 내보낸다."""
+        """Append a filtered point; with splines, emit the newly determined previous curve segment."""
         if not self.spline:
             self.stroke.append(p)
             return
@@ -147,9 +147,9 @@ class StrokeSmoother:
             self.stroke += _catmull_rom(c[-4] if len(c) >= 4 else c[-3], c[-3], c[-2], c[-1])
 
     def update(self, point: Sequence[float] | None, pen_down: bool, t: float) -> SmoothResult:
-        """point: 필기 좌표 (손이 없으면 None), pen_down: 쓰는 중인지, t: 초 단위 시각."""
+        """point: input position (None if hand missing); pen_down: writing state; t: time in seconds."""
         if point is None:
-            # 손을 놓치면 획을 끝내고 필터를 초기화해 다시 나타날 때 선이 튀지 않게 한다
+            # Finish the stroke and reset filters on tracking loss to avoid jumps when the hand reappears
             self.filter.reset()
             return SmoothResult(finished=self._finish() if self.stroke is not None else None)
 
