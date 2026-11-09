@@ -1,4 +1,4 @@
-"""팀 StrokeSmoother와 렌더러 연결 회귀 테스트. GUI/웹캠이 필요 없다."""
+"""Regression tests for the team's StrokeSmoother/renderer bridge without GUI or webcam."""
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -12,10 +12,10 @@ from airboard.smoothing.filters import NoFilter
 
 
 class BridgeTests(unittest.TestCase):
-    """미리보기 교체와 꼬리 제거, 페이지 전환 시 필기 보존을 검사한다."""
+    """Verify preview replacement, tail trimming, and ink preservation across page changes."""
 
     def setUp(self) -> None:
-        """작은 유색 PDF와 팀 보정기를 연결한다."""
+        """Connect the team's smoother to a small colored PDF."""
         self.temp = tempfile.TemporaryDirectory()
         path = Path(self.temp.name) / 'source.pdf'
         with pymupdf.open() as doc:
@@ -30,12 +30,12 @@ class BridgeTests(unittest.TestCase):
         self.style = InkStyle('pen')
 
     def tearDown(self) -> None:
-        """자원을 해제한다."""
+        """Release resources."""
         self.board.close()
         self.temp.cleanup()
 
     def test_final_tail_replaces_live_preview(self) -> None:
-        """마지막 세 점이 미리보기에는 보이지만 최종 레이어에서는 제거된다."""
+        """The last three points appear in preview but are trimmed from the final ink layer."""
         bg = self.board.render_page()
         for i in range(10):
             result = self.smoother.update((20 + i * 10, 70), True, i / 30)
@@ -51,7 +51,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.board.operation_count(), 1)
 
     def test_preview_is_copied_and_can_shrink(self) -> None:
-        """공유 리스트를 외부에서 바꿔도 현재 프리뷰에 영향이 없고 교체 시 꼬리가 사라진다."""
+        """External mutation of a shared list must not affect preview; replacing it removes the tail."""
         points = [(20, 40), (100, 40)]
         self.board.set_preview(points)
         before = self.board.render_page()
@@ -62,7 +62,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.board.operation_count(), 0)
 
     def test_finished_uses_original_tool(self) -> None:
-        """완료 시 UI 도구가 바뀌어도 시작 시 형광펜 스타일을 보존한다."""
+        """Preserve initial highlighter style even when the UI tool changes before completion."""
         points = [(30, 60), (100, 60)]
         bg = self.board.render_page()
         self.bridge.consume(SimpleNamespace(stroke=points, finished=None), InkStyle('highlighter'))
@@ -71,7 +71,7 @@ class BridgeTests(unittest.TestCase):
         np.testing.assert_allclose(self.board.render_page()[60, 60], expected, atol=1)
 
     def test_very_short_skipped_stroke_leaves_no_ink(self) -> None:
-        """시작 skip 안에 끝난 동작은 빈 획/undo 항목을 남기지 않는다."""
+        """A stroke ending within start_skip must not leave an empty stroke or undo entry."""
         bg = self.board.render_page()
         self.bridge.consume(self.smoother.update((30, 50), True, 0), self.style)
         self.bridge.consume(self.smoother.update((40, 50), False, .03), self.style)
@@ -79,7 +79,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.board.operation_count(), 0)
 
     def test_page_switch_finalizes_and_requires_lift(self) -> None:
-        """페이지 이동 전 최종 획 저장, 이후 누른 채 입력은 새 페이지에 기록하지 않는다."""
+        """Finalize ink before changing pages and do not draw on the next page while pen remains down."""
         session = RenderSession(self.board, self.smoother, NoFilter())
         for i in range(10):
             session.feed((20 + i * 10, 70), True, i / 30)
@@ -95,7 +95,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.board.operation_count(1), 1)
 
     def test_eraser_survives_flush_and_undo(self) -> None:
-        """저장/페이지 이동 직전 지우개 동작이 프리뷰 제거로 유실되지 않는다."""
+        """Eraser actions must not be lost when previews are cleared before save/page changes."""
         bg = self.board.render_page()
         self.board.commit_stroke([(20, 60), (150, 60)])
         ink = self.board.render_page()
@@ -108,7 +108,7 @@ class BridgeTests(unittest.TestCase):
         np.testing.assert_array_equal(self.board.render_page(), ink)
 
     def test_pointer_and_hand_loss_do_not_draw(self) -> None:
-        """포인터와 손 소실은 영구 필기를 만들지 않는다."""
+        """Pointer use and tracking loss must not create permanent ink."""
         session = RenderSession(self.board, self.smoother, NoFilter())
         session.feed((80, 60), False, 0, temporary_tool='pointer')
         session.feed(None, False, .1)
