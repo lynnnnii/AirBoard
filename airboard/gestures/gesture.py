@@ -287,7 +287,7 @@ class SwipeDetector:
     """Detect a swipe from fast lateral movement of an open hand.
 
     Measures to improve recognition reliability
-      - wrist 대신 손바닥 중심을 추적 (더 안정적)
+      - Track the palm center rather than wrist (more stable)
       - Detect movement of one open hand; reset history on tool actions or tracking loss
       - Tolerate brief finger-pose jitter without recording those frame coordinates
       - Exclude cooldown movement from the next swipe history
