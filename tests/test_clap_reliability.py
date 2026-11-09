@@ -1,6 +1,6 @@
-"""박수 가림 허용 및 페이지 오작동 방지를 검증한다."""
+"""Verify clap-occlusion tolerance and prevention of accidental page changes."""
 import os
-os.environ.setdefault('AIRBOARD_USER_SETTINGS', os.path.join(os.path.dirname(__file__), '_no_user_settings.json'))  # 개인 설정 없이 팀 기본값으로 검사
+os.environ.setdefault('AIRBOARD_USER_SETTINGS', os.path.join(os.path.dirname(__file__), '_no_user_settings.json'))  # Test with team defaults rather than personal settings
 import json
 import unittest
 from unittest.mock import patch
@@ -12,7 +12,7 @@ from airboard.calibration import Calibration
 
 
 def hand(x):
-    """손바닥 길이 30픽셀인 합성 랜드마크."""
+    """Synthetic landmarks with a 30-pixel palm length."""
     a=np.zeros((21,3),np.float32)
     a[:,0]=x; a[:,1]=50
     a[0,1]=80; a[9,1]=50
@@ -83,7 +83,7 @@ class ClapTests(unittest.TestCase):
 
 
     def test_failed_first_clap_does_not_lock_writing(self):
-        """박수 1회 대기 중에도 한 손으로 돌아와 새 핀치를 하면 쓴다."""
+        """A fresh pinch after returning to one hand should draw even while waiting for the second clap."""
         r=GestureRecognizer(self.config)
         with patch('airboard.gestures.gesture.classify_pose',return_value='OPEN'),patch('airboard.gestures.gesture.pinch_ratio',return_value=.5):
             r.update(pair(4),640,480,0)
@@ -98,7 +98,7 @@ class ClapTests(unittest.TestCase):
         self.assertTrue(result.debug['clap_navigation_blocked'])
 
     def test_highlighter_writes_before_navigation_cooldown_finishes(self):
-        """형광펜 전환 뒤 페이지 잠금과 별개로 새 필기를 허용한다."""
+        """Allow new writing after switching to highlighter despite the page-navigation lock."""
         r=GestureRecognizer(self.config)
         c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
         c.settings.mapping['PINCH']='draw'  # Explicit legacy preset under test
@@ -119,7 +119,7 @@ class ClapTests(unittest.TestCase):
 
 
     def test_contact_after_short_reacquisition_is_accepted(self):
-        """가까워지던 두 손이 잠깐 사라져도 다시 검출된 접촉을 이어 센다."""
+        """Count clap contact after briefly losing approaching hands and reacquiring them."""
         d=ClapDetector(self.config)
         self.assertFalse(d.update(pair(4),0))
         self.assertFalse(d.update(pair(3.3),.1))
@@ -129,7 +129,7 @@ class ClapTests(unittest.TestCase):
         self.assertTrue(d.update([hand(100)],.8))
 
     def test_fist_noise_during_pinch_does_not_require_repinch(self):
-        """로그에서 관찰한 경계 주먹 자세가 지속 핀치를 끊지 않게 한다."""
+        """A borderline fist pose observed in logs must not interrupt a held pinch."""
         r=GestureRecognizer(self.config)
         tips={'index':.78,'middle':.5,'ring':.4,'pinky':.35}
         with patch('airboard.gestures.gesture.classify_pose',return_value='NONE'),patch('airboard.gestures.gesture.pinch_ratio',return_value=.1):
@@ -154,7 +154,7 @@ class ClapTests(unittest.TestCase):
 
 
     def test_release_during_clap_guard_allows_first_pinch_after_guard(self):
-        """보호 시간 중 벌린 손을 기억해 형광펜 전환 후 재핀치를 요구하지 않는다."""
+        """Remember an opened hand during the grace period to avoid requiring an extra pinch after a tool switch."""
         r=GestureRecognizer(self.config)
         c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
         c.settings.mapping['PINCH']='draw'  # Explicit legacy preset under test
@@ -174,7 +174,7 @@ class ClapTests(unittest.TestCase):
         self.assertEqual(packet.commands,())
 
     def test_guard_without_observed_release_still_requires_open(self):
-        """양손 가림 후 손을 벌린 증거가 없으면 임의로 필기를 시작하지 않는다."""
+        """Do not resume drawing after two-hand occlusion without evidence of an opened hand."""
         r=GestureRecognizer(self.config)
         with patch('airboard.gestures.gesture.classify_pose',return_value='NONE'),patch('airboard.gestures.gesture.pinch_ratio',return_value=.1):
             r.update(pair(4),640,480,0)
@@ -183,7 +183,7 @@ class ClapTests(unittest.TestCase):
 
 
     def test_completed_clap_ends_previous_ink_and_switches_once(self):
-        """직전 프레임이 필기여도 완료된 박수를 버리지 않고 획 종료 후 전환한다."""
+        """Retain a completed clap event even after drawing, and switch tools after finishing the stroke."""
         from airboard.ui.controller import InputState
         c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
         c.settings.mapping['PINCH']='draw'  # Explicit legacy preset under test
@@ -196,7 +196,7 @@ class ClapTests(unittest.TestCase):
         self.assertEqual(c.update(InputState((.5,.5)),.2).tool,'highlighter')
 
     def test_completed_clap_passes_passive_palette_but_not_settings(self):
-        """팔레트를 스치는 커서는 박수 전환을 막지 않고 설정 편집은 차단한다."""
+        """Passing over the palette does not suppress clap switching, but editing settings does."""
         from airboard.ui.controller import InputState
         state=InputState((.2,.03),frozenset({'DOUBLE_CLAP'}))
         c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
