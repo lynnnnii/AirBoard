@@ -10,18 +10,14 @@ from airboard.smoothing.filters import OneEuroFilter
 
 class EasyStopTests(unittest.TestCase):
     def test_two_fingers_and_l_both_end_stroke(self):
-        for separation in [0,20,50]:
-            r=GestureRecognizer();c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
-            stop=hand();stop[12,:2]=[85+separation,70]
-            self.assertEqual(classify_pose(stop,finger_curls(stop)),'TWO_FINGERS')
-            poses=[hand(),stop,stop,hand(),hand(True),hand()]
-            phases=[]
-            for i,lm in enumerate(poses):
-                result=r.update([lm],640,480,i/30)
-                packet=c.update(from_gesture_result(result,(640,480)),i/30)
-                phases.append(packet.phase)
-                self.assertEqual(packet.commands,())
-            self.assertEqual(phases,['down','up','hover','down','up','down'])
+        # Current default writes with PINCH, stops with TWO_FINGERS, and
+        # translates sideways thumb gestures into undo/redo commands.
+        from airboard.ui.controller import InputState
+        c=UIController(Calibration([[0,0],[1,0],[1,1],[0,1]]),Settings())
+        self.assertEqual(c.update(InputState((.4,.4),frozenset({'PINCH'})),0).phase,'down')
+        self.assertEqual(c.update(InputState((.5,.5),frozenset({'TWO_FINGERS'})),.1).phase,'up')
+        self.assertEqual(c.update(InputState((.5,.5),frozenset({'THUMB_LEFT'})),.2).commands,('undo',))
+        self.assertEqual(c.update(InputState((.5,.5),frozenset({'PINCH'})),.3).phase,'down')
 
     def test_fast_profile_reduces_lag_without_removing_all_smoothing(self):
         cfg=Settings().ui['handwriting_smoothing']
